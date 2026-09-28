@@ -520,7 +520,13 @@ for (const [okFlag, label] of noFallbackChecks) {
 /* ---------- 回归：方向词 + 城市 = 出行，不是商品 ----------
    实测踩过的坑：「去上海」「到北京」「飞成都」「回广州」「订张去上海的票」
    「上海怎么走」全都被当成商品名，弹出一张标题为「去上海」的比价卡 ——
-   用户明摆着要出行，界面却在给他比价。方向词紧挨着城市，就是出行信号。 */
+   用户明摆着要出行，界面却在给他比价。方向词在城市左边，就是出行信号。
+
+   下面三组是**独立审计**（变异实验）逼出来的，第一版漏掉的：
+   ① 方向词与城市隔 ≥2 字（「去一趟上海」）—— 固定 2 字窗口看不出来
+   ② 「购 / 多少钱」类出行（「订购去上海的票」）—— 被 RE_SHOP 守卫误否
+   ③ 品牌首字恰好是方向词（「回力北京布鞋」「飞猪上海酒店」）—— 被误判成出行
+   这三组必须在场，否则「漏判 / 误判」两边都会悄悄回潮。 */
 say('\n— 回归：方向词 + 城市 要走出行 —');
 const travelCases = [
   ['去上海',       (r) => r.type === 'both' && r.to === '上海'],
@@ -533,21 +539,39 @@ const travelCases = [
   ['订张去上海的票', (r) => r.type === 'both' && r.to === '上海'],
   ['上海怎么走',   (r) => r.type === 'both' && r.to === '上海'],
   ['周末去杭州玩', (r) => r.type === 'both' && r.to === '杭州'],
+  // ① 方向词与城市隔了动量词：写死 2 字窗口时会整句变成商品名
+  ['去一趟上海',     (r) => r.type === 'both' && r.to === '上海'],
+  ['我要去一次深圳', (r) => r.type === 'both' && r.to === '深圳'],
+  ['下周去一下成都', (r) => r.type === 'both' && r.to === '成都'],
+  ['去了一趟上海',   (r) => r.type === 'both' && r.to === '上海'],
+  ['回了趟南京',     (r) => r.type === 'both' && r.to === '南京'],
+  ['飞  上海',       (r) => r.type === 'air'  && r.to === '上海'],   // 中间夹空格
+  // ② 「购 / 多少钱」不能把出行翻成购物：「票」说明要的是行程
+  ['订购去上海的票', (r) => r.type === 'both' && r.to === '上海'],
+  ['去上海多少钱',   (r) => r.type === 'both' && r.to === '上海'],
+  ['去上海的价格',   (r) => r.type === 'both' && r.to === '上海'],
+  ['去上海买票',     (r) => r.type === 'both' && r.to === '上海'],
 ];
 for (const [q, okFn] of travelCases) {
   const r = SXM.parseIntent(q);
   if (okFn(r || {})) { pass++; say(`✓  「${q}」→ 出行（${r && r.type}${r && r.to ? ' · ' + r.to : ''}）`); }
   else { fail++; say(`✗  「${q}」没走出行 → ${JSON.stringify(r)}`); }
 }
-// 带购物/外卖词的，一个都不许被出行抢走
+/* 带购物/外卖词、以及「品牌首字是方向词」的，一个都不许被出行抢走。
+   注意品牌样本**必须带城市名**：像「回力鞋」「飞利浦剃须刀」这种没有城市的，
+   findCities 返回空、第一行就返回了，压根走不到方向词逻辑 —— 那种断言是空断言，
+   看着像在守品牌，其实什么都没守（审计用变异实验证明过）。 */
 const notTravelCases = [
-  ['帮我买北京烤鸭',   (r) => r.type === 'shop'],
-  ['去上海买表',       (r) => r.type === 'shop'],
-  ['到上海的外卖',     (r) => r.type === 'food'],
-  ['去上海吃火锅',     (r) => r.type === 'food'],
-  ['飞利浦剃须刀多少钱', (r) => r.type === 'shop'],   // 「飞」在品牌里，不是「飞过去」
-  ['回力鞋',           (r) => r.type === 'shop'],      // 「回」在品牌名里
-  ['AirPods Pro 3',    (r) => r.type === 'shop' && r.product === 'AirPods Pro 3'],
+  ['帮我买北京烤鸭',       (r) => r.type === 'shop'],
+  ['去上海买表',           (r) => r.type === 'shop'],   // 买 + 没有「票」→ 让位给购物
+  ['到上海的外卖',         (r) => r.type === 'food'],
+  ['去上海吃火锅',         (r) => r.type === 'food'],
+  ['回力北京布鞋',         (r) => r.type === 'shop'],   // 「回」是品牌首字，不是方向词
+  ['回力上海旗舰店',       (r) => r.type === 'shop'],
+  ['飞猪上海迪士尼门票',   (r) => r.type === 'shop'],   // 有「票」字但方向词是品牌，仍算购物
+  ['飞猪北京酒店',         (r) => r.type === 'shop'],
+  ['飞利浦上海旗舰店',     (r) => r.type === 'shop'],
+  ['AirPods Pro 3',        (r) => r.type === 'shop' && r.product === 'AirPods Pro 3'],
 ];
 for (const [q, okFn] of notTravelCases) {
   const r = SXM.parseIntent(q);
@@ -561,8 +585,9 @@ const travelCard = SXM.renderRoute(onlyTo);
 if (onlyTo.from === null && travelCard.includes('出发地') && !/¥\d/.test(travelCard)) {
   pass++; say('✓  只认出目的地时，出行卡明确问「还差一个出发地」，不夹带任何价格');
 } else { fail++; say('✗  出行卡渲染不对：' + JSON.stringify({ from: onlyTo.from, head: travelCard.slice(0, 60) })); }
-if (srcForFiller.includes('directionTravel')) { pass++; say('✓  方向词+城市 的出行判据还在（防回退）'); }
-else { fail++; say('✗  出行判据 directionTravel 没了'); }
+/* 这里原先还有一条 `srcForFiller.includes('directionTravel')` 的断言，已删。
+   它是纯 grep 源码字符串：把函数改名、甚至让它无条件 return null（功能全废），
+   这条都照样通过 —— 不是验证，只是装饰。行为断言（上面 30 条）才是真的守卫。 */
 
 /* ---------- 清单输入切分 ---------- */
 say('\n— 清单输入切分 —');

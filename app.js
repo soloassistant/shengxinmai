@@ -210,17 +210,36 @@
 
   /**
    * 「去/到/往/飞/回 + 城市」就算出行意图 —— 哪怕用户没说「高铁」「机票」。
-   * 返回 { fly } ：是「飞」过去的就给飞机，否则火车+飞机都摆上。
-   * 只认紧挨着城市名的方向词，免得「帮我买北京烤鸭」这种被当成路线。
+   * 返回 { fly }：是「飞」过去的就给飞机，否则火车+飞机都摆上。
+   *
+   * 判据：从城市名**向左逐字回看**，中间只许夹动量词/助词（GAP_OK），
+   * 遇到的第一个别的字必须是方向词，否则不算出行。
+   *
+   * 为什么不用固定字数窗口（一开始就是那么写的，两个方向都翻车）：
+   *  - 窗口太窄：「去一趟上海」「我要去一次深圳」（方向词和城市隔 2 字）
+   *    被判成购物，弹出标题为「去一趟上海」的比价卡 —— 正是要消灭的现象。
+   *  - 窗口一放宽：「回力北京布鞋」「飞猪上海迪士尼门票」这种**品牌首字恰好
+   *    是方向词**的，就被认成出行（回力鞋 → 出行卡）。逐字回看两头都堵住。
+   *
    * 命不中就返回 null，交给上层继续按外卖/购物判。
    */
+  const DIR_WORD = /[去到往回飞]/;             // 方向词
+  const GAP_OK   = /[一了趟次下个几来回\s]/;    // 允许夹在方向词与城市之间的动量词/助词
+  const GAP_MAX  = 6;                          // 最多回看几个字，防止无限扫
   function directionTravel(text, hits) {
     if (!hits || !hits.length) return null;
     for (let i = 0; i < hits.length; i++) {
-      const before = text.slice(Math.max(0, hits[i].idx - 2), hits[i].idx);
-      if (/[去到往回飞]/.test(before)) return { fly: /飞/.test(before) };
+      const stop = Math.max(0, hits[i].idx - GAP_MAX);
+      for (let k = hits[i].idx - 1; k >= stop; k--) {
+        const ch = text[k];
+        if (DIR_WORD.test(ch)) return { fly: ch === '飞' };
+        if (!GAP_OK.test(ch)) break;   // 夹层里出现别的字（品牌名等）→ 不是出行
+      }
     }
-    // 没有紧邻的方向词，但句子里在问「怎么走 / 怎么去 / 怎么坐车」
+    // 城市不在方向词右边，但句子里在问「怎么走 / 怎么去 / 怎么坐车」。
+    // 注意：这条只有句子里**已经有城市**才走得到（没有城市在上面第一行就返回了），
+    // 所以「如何去机场」这类没城市、也没别的线索的，仍按原样落到购物分支 ——
+    // 有意为之：把「怎么去」无条件当出行，会把「怎么去黑头」也算成出行。
     if (/怎么(?:走|去|到|坐车|坐地铁)|咋(?:走|去)|如何去|怎样去/.test(text)) return { fly: false };
     return null;
   }
@@ -232,6 +251,11 @@
   const RE_AIR   = /机票|航班|飞机|飞往|直飞|航空/;
   const RE_FOOD  = /外卖|点餐|点个|点一份|想吃|想喝|来一份|来一杯|奶茶|咖啡|麻辣烫|烧烤|火锅|炸鸡|披萨|汉堡|麦当劳|肯德基|必胜客|星巴克|瑞幸|蜜雪|便当|午饭|晚饭|夜宵|早餐/;
   const RE_SHOP  = /买|购|多少钱|价格|比价|划算|值得|优惠|降价|折扣/;
+  /* 判「这句话到底想买东西、还是想赶路」时用的一对词表。
+     RE_BUY 是**真购物**信号；RE_SHOP 里的「多少钱 / 价格」太弱，不能拿它
+     否掉出行 —— 「去上海多少钱」问的是票价。而碰上「票」，说明要的仍是行程。 */
+  const RE_BUY    = /买|购|入手|拿下|下单|拼单/;
+  const RE_TICKET = /票|客运|班次|卧铺/;
 
   function parseIntent(raw) {
     const text = String(raw || '').trim();
@@ -286,14 +310,22 @@
     /* ---- 出行：只说了「方向词 + 城市」，工具没说 → 按出行处理 ----
        实测踩过的坑：「去上海」「到北京」「飞成都」「回广州」「订张去上海的票」
        「上海怎么走」全都掉进了购物分支，弹出一张标题为「去上海」的比价卡 ——
-       用户明摆着要出行，界面却在给他比价。方向词紧挨着城市，就是出行信号。
-       但「去上海买表」「到上海的外卖」这类带购物/外卖词的，仍归各自的分支。 */
+       用户明摆着要出行，界面却在给他比价。方向词在城市的左边，就是出行信号。
+
+       要不要让位给购物，只看**真购物**信号（RE_BUY 且没有「票」字）：
+       「去上海买表」让位（买表），「订张去上海的票」不让位（要的是行程）。
+       一开始这里是 `!RE_SHOP.test(text)`，被「购」字坑了 ——
+       「订购去上海的票」判成购物、「订购北京到上海的票」却能出行，
+       同样意思两个结果；「去上海多少钱」也被「多少钱」翻成购物。
+       外卖词（isFood）另外让位，见前面分支。 */
+    const wantsBuy = RE_BUY.test(text) && !RE_TICKET.test(text);
     const dirTravel = directionTravel(text, hits);
-    if (dirTravel && !isFood && !RE_SHOP.test(text)) {
+    if (dirTravel && !isFood && !wantsBuy) {
       if (badDate) return needDate();
       const r = resolveRoute(text, hits);
+      // 走到这里 isRail 必为 false（火车/飞机在前面就返回了），不用再判
       return {
-        type: (dirTravel.fly && !isRail) ? 'air' : 'both',
+        type: dirTravel.fly ? 'air' : 'both',
         from: r.from, to: r.to, fromGuessed: r.guessed,
         cities, date, raw: text
       };
