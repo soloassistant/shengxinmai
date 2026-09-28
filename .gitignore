@@ -1,0 +1,25 @@
+# 联盟密钥：真实值只留在本机 / 部署目录，绝不进仓库
+# 需要的变量名见 server/env.local.example.json
+server/env.local.json
+
+# 自采价格历史库（运行时数据，不是代码）
+.data/
+
+# 测试输出日志（每次跑测试都会重写）
+*-out.txt
+
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# 本地调试产物
+*.log
+.sxm-tmp/

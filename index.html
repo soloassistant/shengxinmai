@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>省心买 · AI 比价与出行助手</title>
+
+<!-- 分享到微信 / QQ 时的链接预览卡片内容。这是网页相对小程序的天然优势：
+     链接可以被任意转发、被搜索引擎收录，不需要企业主体的分享模板。 -->
+<meta name="description" content="说一句人话，横向拉平各平台到手价；一份清单算清该分几家买。不代下单、不代支付。">
+<meta property="og:title" content="省心买 · AI 比价与出行助手">
+<meta property="og:description" content="贴一句商品名，横向拉平各平台到手价。把比价链接发给朋友，打开就自动比。">
+<meta property="og:type" content="website">
+
+<!-- 主题色跟随明暗，让手机浏览器地址栏不再在深色模式下刺眼。
+     用单个 meta + JS 更新，而不是两个带 media 的 meta：
+     后者在用户手动切主题时会和系统偏好打架，地址栏和页面颜色对不上。 -->
+<meta name="theme-color" id="theme-color" content="#F5F6F8">
+
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="省心买">
+<link rel="stylesheet" href="styles.css">
+
+<!-- 主题必须在 CSS 生效前落地，否则深色模式用户会看到一帧白屏闪烁。
+     放在 head 里同步执行，不能挪到 app.js —— 那时页面已经画完了。 -->
+<script>
+(function () {
+  try {
+    var m = localStorage.getItem('sxm.theme') || 'auto';
+    var dark = m === 'dark' || (m === 'auto' && window.matchMedia
+      && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    var tc = document.getElementById('theme-color');
+    if (tc) tc.setAttribute('content', dark ? '#0E1116' : '#F5F6F8');
+  } catch (e) { /* 存不了就算了，跟随系统也能用 */ }
+})();
+</script>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ============ 顶栏 ============ -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">省</div>
+      <div class="brand-text">
+        <div class="brand-name">省心买</div>
+        <div class="brand-sub">外卖 · 比价 · 出行</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button class="ghost-btn" id="btn-theme" type="button" title="切换主题">
+        主题：自动
+      </button>
+      <button class="ghost-btn" id="btn-install" type="button" title="安装到桌面 / 主屏幕" hidden>
+        安装
+      </button>
+      <button class="ghost-btn" id="btn-status" type="button">
+        <span class="dot" id="status-dot"></span>接入状态
+      </button>
+    </div>
+  </header>
+
+  <!-- ============ 对话流 ============ -->
+  <main class="stream" id="stream" aria-live="polite" aria-label="对话结果">
+    <!-- 欢迎卡 -->
+    <section class="msg msg-ai" id="welcome">
+      <div class="bubble bubble-ai">
+        <p class="lead">说一句人话，我把该比的都给你比了。</p>
+        <div class="cap-grid">
+          <button class="cap" data-demo="帮我买 AirPods Pro 3">
+            <span class="cap-ico ico-shop">比</span>
+            <span class="cap-t">电商比价</span>
+            <span class="cap-d">贴一句商品名，横向拉平各平台到手价</span>
+          </button>
+          <button class="cap" data-demo="明天北京到上海的高铁">
+            <span class="cap-ico ico-trip">行</span>
+            <span class="cap-t">机票火车票</span>
+            <span class="cap-d">给出发地目的地和日期，直达官方购票页</span>
+          </button>
+          <button class="cap" data-demo="想点个麻辣烫外卖">
+            <span class="cap-ico ico-food">吃</span>
+            <span class="cap-t">外卖领券</span>
+            <span class="cap-d">先领红包再下单，同店能省一顿的钱</span>
+          </button>
+          <button class="cap cap-wide" data-open="basket">
+            <span class="cap-ico ico-list">单</span>
+            <span class="cap-t">省钱清单</span>
+            <span class="cap-d">要买好几样？先算清楚该分几家买、能省多少</span>
+          </button>
+        </div>
+        <p class="fine">我不会替你付款，也不会碰你的账号。比完价、领完券，下单还是走平台官方 App —— 这是唯一安全也不违规的做法。</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============ 输入区 ============ -->
+  <footer class="composer">
+    <!-- 最近查过：点一下直接重查，不用重新打字。没有历史时整行隐藏。 -->
+    <div class="chips chips-recent" id="recent-row" hidden></div>
+    <div class="chips" id="chips">
+      <button class="chip" data-fill="帮我买 ">买东西比价</button>
+      <button class="chip" data-open="basket">省钱清单</button>
+      <button class="chip" data-fill="想点个 ">点外卖</button>
+      <button class="chip" data-fill="帮我查机票 从 到 ">机票</button>
+      <button class="chip" data-fill="帮我查高铁 从 到 ">火车票</button>
+    </div>
+    <form class="input-row" id="form" autocomplete="off">
+      <input id="input" type="text" placeholder="比如：帮我买扫地机器人 / 下周去成都的机票 / 想喝奶茶"
+             aria-label="输入你想买或想查的东西" />
+      <button class="mic" type="button" id="btn-mic" aria-label="语音输入" hidden>
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path fill="currentColor" d="M12 15.2a3.7 3.7 0 0 0 3.7-3.7V6a3.7 3.7 0 1 0-7.4 0v5.5A3.7 3.7 0 0 0 12 15.2Z"/>
+          <path fill="currentColor" d="M18.9 11.5a.9.9 0 1 0-1.8 0 5.1 5.1 0 0 1-10.2 0 .9.9 0 1 0-1.8 0 6.9 6.9 0 0 0 6 6.83v1.87H9.2a.9.9 0 1 0 0 1.8h5.6a.9.9 0 1 0 0-1.8h-1.9v-1.87a6.9 6.9 0 0 0 6-6.83Z"/>
+        </svg>
+      </button>
+      <button class="send" type="submit" aria-label="发送">↑</button>
+    </form>
+    <p class="legal">仅供比价与跳转，不代下单、不代支付</p>
+  </footer>
+
+</div>
+
+<!-- ============ 接入状态抽屉 ============ -->
+<div class="drawer-mask" id="drawer-mask"></div>
+<aside class="drawer" id="drawer" aria-label="数据接入状态">
+  <div class="drawer-head">
+    <h3>数据接入状态</h3>
+    <button class="ghost-btn" id="btn-close" type="button">关闭</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+  <div class="drawer-foot">
+    <p>比价要拿到真实价格，必须走各平台<strong>官方联盟接口</strong>。密钥只能放在服务端，前端永远不放。<br>配好密钥之前，助手会退化成「手动比价」——帮你把各平台的搜索页一次性摆好，你自己扫一眼。这不丢人，很多比价工具就是这么起步的。</p>
+  </div>
+</aside>
+
+<!-- ============ 省钱清单抽屉 ============ -->
+<div class="drawer-mask" id="basket-mask"></div>
+<aside class="drawer" id="basket" aria-label="省钱清单">
+  <div class="drawer-head">
+    <h3>省钱清单</h3>
+    <button class="ghost-btn" id="basket-close" type="button">关闭</button>
+  </div>
+  <div class="drawer-body">
+    <div class="basket-input">
+      <label class="fine" for="basket-text">一行一件，最多 8 件</label>
+      <textarea id="basket-text" placeholder="猫粮&#10;洗衣液&#10;AirPods Pro 3"></textarea>
+      <p class="basket-hint">
+        我会逐件比价，然后回答一个问题：<strong>该分几家买，还是一家买齐？</strong><br>
+        差额小于麻烦门槛（默认 ¥10）时我会建议你图省事——为省三块钱多装两个 App，多数人不划算。
+      </p>
+      <div class="basket-bar">
+        <span class="basket-count" id="basket-count">0 件</span>
+        <button class="retry" id="basket-go" type="button" style="margin-top:0">算一下怎么买最省</button>
+      </div>
+    </div>
+  </div>
+  <div class="drawer-foot">
+    <p>清单只算<strong>各平台最低到手价</strong>之和，不含运费。合并下单时运费可能把差价再拉平一次，<strong>下单页要自己看一眼运费</strong>。</p>
+  </div>
+</aside>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+<script>
+/* Service Worker：让网页能装到桌面、断网时还有壳。
+   小程序这条路当前走不通（个人主体限制），PWA 是最接近「像 App」的东西。
+   装不上也不影响用，所以整体 try 掉，绝不让它挡住主流程。 */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () { /* 离线能力失败不影响使用 */ });
+  });
+}
+</script>
+</body>
+</html>

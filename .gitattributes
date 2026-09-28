@@ -1,0 +1,10 @@
+# 统一行尾：仓库里一律 LF，检出时按平台处理。
+# 不加这个，Windows 上每次提交都会出现"整个文件都改了"的假 diff。
+* text=auto eol=lf
+
+# 二进制资源不参与行尾转换
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary

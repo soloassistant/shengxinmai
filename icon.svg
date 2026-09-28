@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="省心买">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF7A45"/>
+      <stop offset="1" stop-color="#FF4D2E"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 满幅底色 + 居中的 ¥ 符号。
+       不用 <text> 写字，是因为图标里的字体可用性不可控：
+       换台设备可能就变成方块或衬线体，与其赌，不如画路径。 -->
+  <rect width="512" height="512" rx="112" fill="url(#g)"/>
+
+  <g fill="none" stroke="#FFFFFF" stroke-width="34"
+     stroke-linecap="round" stroke-linejoin="round">
+    <!-- ¥ 的两撇 -->
+    <path d="M156 142 L256 286 L356 142"/>
+    <!-- 竖笔 -->
+    <path d="M256 286 L256 380"/>
+    <!-- 两横 -->
+    <path d="M182 312 L330 312"/>
+    <path d="M182 356 L330 356"/>
+  </g>
+</svg>

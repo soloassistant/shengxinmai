@@ -1,0 +1,416 @@
+#!/usr/bin/env node
+/* ==========================================================================
+   省心买 · 服务端（零依赖，Node 18+）
+   --------------------------------------------------------------------------
+   一个进程同时干三件事：
+     1. 比价接口   /api/compare   —— 这是加服务端的唯一理由（密钥不能放前端）
+     2. 增值接口   /api/basket 省钱清单、/api/history 价格历史
+     3. 静态文件   —— 让整个应用单端口跑起来，可以直接部署
+
+   工程上的底线（都是上线之后才会痛的东西）：
+     · 每个请求一个 request-id，贯穿日志与响应头 —— 用户报错时能直接定位
+     · 对外接口限流 —— 保护的是我们自己的联盟配额，不是"防攻击"这么抽象
+     · 比价结果做 TTL 缓存 —— 省掉重复的第三方请求，也避免被判定异常流量
+     · 单平台失败必须被隔离 —— 一个平台挂了不能让整张卡变成错误
+     · 错误一律是 { ok:false, error:{ code, message } } —— 前端不用猜字符串
+
+   启动：
+     node server/server.js
+     PORT=9000 LOG_LEVEL=debug node server/server.js
+
+   环境变量：
+     PORT               监听端口（部署平台会注入）
+     LOG_LEVEL          debug | info | warn | error
+     SXM_DATA_DIR       价格历史落盘目录（默认 <项目根>/.data）
+     SXM_CACHE_TTL_MS   比价缓存时长，默认 60000
+     SXM_RL_BURST       限流桶容量，默认 60
+     SXM_RL_RATE        限流补速（个/秒），默认 1
+     （各平台密钥见 /api/health 返回的 envKeys）
+   ========================================================================== */
+
+'use strict';
+
+const http = require('node:http');
+const fs   = require('node:fs');
+const path = require('node:path');
+
+const { compare, status } = require('./adapters');
+const log = require('./lib/logger');
+const { createCache, normKey } = require('./lib/cache');
+const { createRateLimiter } = require('./lib/ratelimit');
+const { createMetrics } = require('./lib/metrics');
+const { createStore, titleFingerprint } = require('./lib/store');
+const { computeBasket } = require('./lib/basket');
+const { settle } = require('./lib/http');
+const { loadEnvFile } = require('./lib/envfile');
+
+/* 密钥装载：优先真实环境变量，其次 server/env.local.json（部署沙箱设不了 env，密钥随目录走）。
+   必须在读取任何 process.env 之前执行。 */
+loadEnvFile(path.join(__dirname, 'env.local.json'), process.env);
+
+const PORT = Number(process.env.PORT) || 8787;
+const ROOT = path.resolve(__dirname, '..');          // 项目根 = 静态文件根
+
+/* 价格历史落在项目根的 .data 下。静态服务会拒绝任何以 . 开头的路径段，
+   所以这个文件不会被公开下载到。要换位置就设 SXM_DATA_DIR。 */
+const DATA_DIR   = process.env.SXM_DATA_DIR || path.join(ROOT, '.data');
+const PRICE_FILE = path.join(DATA_DIR, 'prices.jsonl');
+
+const CACHE_TTL = Number(process.env.SXM_CACHE_TTL_MS) || 60000;
+const RL_BURST  = Number(process.env.SXM_RL_BURST) || 60;
+const RL_RATE   = Number(process.env.SXM_RL_RATE) || 1;
+
+const BASKET_MAX_ITEMS = 8;      // 一件商品 = 一组外部查询，8 件已经要打 24 次
+const BASKET_MAX_LEN   = 40;     // 单个关键词长度上限
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.css' : 'text/css; charset=utf-8',
+  '.js'  : 'application/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.md'  : 'text/plain; charset=utf-8',
+  '.svg' : 'image/svg+xml',
+  '.ico' : 'image/x-icon',
+  '.png' : 'image/png',
+  '.webmanifest': 'application/manifest+json; charset=utf-8'
+};
+
+/* ---------- 组件 ---------- */
+const cache   = createCache({ ttl: CACHE_TTL, max: 500 });
+const metrics = createMetrics();
+const limiter = createRateLimiter({ capacity: RL_BURST, refillPerSec: RL_RATE });
+
+/* 清单接口比单次比价贵得多（N 件商品 = N 组外部请求），
+   所以给它一个更紧的独立桶，而不是共用 /api/compare 的额度。 */
+const basketLimiter = createRateLimiter({ capacity: 12, refillPerSec: 0.2 });
+
+let store;
+try {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  store = createStore({ file: PRICE_FILE });
+  store.ensureLoaded();
+} catch (e) {
+  // 只读文件系统 / 无权限都不该让服务起不来：历史是增值功能，比价才是主业
+  log.warn('store.unavailable', { dir: DATA_DIR, err: String(e && e.message || e) });
+  store = createStore({ file: null });
+}
+
+/* ---------- 响应工具 ---------- */
+function json(res, code, obj, rid, extra = {}) {
+  const body = JSON.stringify(obj, null, 2);
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+    ...(rid ? { 'X-Request-Id': rid } : {}),
+    ...extra
+  });
+  res.end(body);
+}
+
+const fail = (res, code, errCode, message, rid, extra) =>
+  json(res, code, { ok: false, error: { code: errCode, message } }, rid, extra);
+
+/**
+ * 取客户端 IP。
+ * 必须优先看 X-Forwarded-For：线上跑在反向代理后面，
+ * 直接读 socket.remoteAddress 会拿到代理自己的地址，
+ * 结果就是"全世界共用一个令牌桶"—— 一个人点几十下，所有人都被限流。
+ * 这个坑在本地测不出来，上线当天才会爆。
+ */
+function clientIp(req) {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.trim()) return xff.split(',')[0].trim();
+  return req.socket.remoteAddress || 'unknown';
+}
+
+/* ---------- 静态文件 ---------- */
+function serveStatic(req, res, urlPath) {
+  const rel = decodeURIComponent(urlPath === '/' ? '/index.html' : urlPath);
+  const file = path.resolve(ROOT, '.' + rel);
+
+  // 目录穿越防护：解析后必须仍在 ROOT 内
+  if (!file.startsWith(ROOT + path.sep) && file !== ROOT) {
+    res.writeHead(403).end('forbidden');
+    return;
+  }
+
+  /* 以 . 开头的路径段一律不对外（.data 价格历史、.wbapp 标记、.git 等）。
+     这是隐私边界，不是洁癖：价格历史库被整包下载走，等于把数据资产送人。 */
+  const segments = rel.split('/').filter(Boolean);
+  if (segments.some((s) => s.startsWith('.'))) {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found');
+    return;
+  }
+
+  fs.stat(file, (err, st) => {
+    if (err || !st.isFile()) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found');
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+      // 一律 no-cache：Service Worker 和静态资源都要能被下一次发布刷新，
+      // 但保留 304 协商，命中时不需要重传体积
+      'Cache-Control': 'no-cache'
+    });
+    fs.createReadStream(file).pipe(res);
+  });
+}
+
+/* ---------- 比价（缓存 + 历史采集 + 指标） ---------- */
+async function getCompare(keyword, rid) {
+  const key = 'cmp:' + normKey(keyword);
+  const hit = cache.get(key);
+  if (hit) {
+    log.debug('compare.cacheHit', { rid, q: keyword });
+    return { ...hit, cached: true };
+  }
+
+  const data = await compare(keyword, process.env, { pageSize: 20, keep: 8 });
+
+  // 每个平台的调用结果都要进指标，否则"哪个平台在拖后腿"永远只是感觉
+  data.platforms.forEach((x) => metrics.platform(x.id, !!x.ok, x.ms || 0));
+
+  // 采集价格历史。这是我们唯一的历史价来源：只记真实看到的价，一次一条。
+  const recorded = store.recordCompare(data);
+  if (recorded) log.info('price.recorded', { rid, q: keyword, points: recorded });
+
+  /* 把历史摘要挂到每个平台的「最低价」上。
+     只挂 lowest 而不挂 items 全部：既避免前端 N+1 请求，也避免响应体膨胀。
+     用户真正会盯的就是最低价那一条，其余等他点开再单独查。 */
+  data.platforms.forEach((x) => {
+    if (!x.ok || !x.lowest || x.lowest.final == null) return;
+    const sku = x.lowest.sku || titleFingerprint(x.lowest.title);
+    if (!sku) return;
+    const h = store.history(x.id, sku);
+    if (!h.found) return;
+    x.lowest.history = {
+      count: h.count,
+      lowest: h.lowest,
+      highest: h.highest,
+      latest: h.latest,
+      verdict: h.verdict,
+      verdictText: h.verdictText,
+      points: h.points.slice(-24)     // 曲线只画最近 24 个点：够看趋势，也不撑大响应
+    };
+  });
+
+  data.cached = false;
+  cache.set(key, data);
+  return data;
+}
+
+/* ---------- 路由 ---------- */
+async function api(req, res, p, url, rid) {
+  if (p === '/api/health') {
+    const list = status(process.env);
+    return json(res, 200, {
+      ok: true,
+      configuredCount: list.filter((x) => x.configured).length,
+      adapters: list,
+      limits: {
+        compareCacheMs: CACHE_TTL,
+        rateBurst: RL_BURST,
+        ratePerSec: RL_RATE,
+        basketMaxItems: BASKET_MAX_ITEMS
+      }
+    }, rid);
+  }
+
+  if (p === '/api/metrics') {
+    return json(res, 200, {
+      ok: true,
+      ...metrics.snapshot({
+        cache: cache.stats(),
+        rateLimit: limiter.stats(),
+        basketRateLimit: basketLimiter.stats(),
+        store: store.stats(),
+        adapters: status(process.env).map((a) => ({ id: a.id, configured: a.configured }))
+      })
+    }, rid);
+  }
+
+  if (p === '/api/compare') {
+    const q = (url.searchParams.get('q') || '').trim();
+    if (!q) return fail(res, 400, 'MISSING_QUERY', '缺少 q 参数', rid);
+    if (q.length > 60) return fail(res, 400, 'QUERY_TOO_LONG', '关键词太长（上限 60 字）', rid);
+
+    const data = await getCompare(q, rid);
+    return json(res, 200, { ok: true, ...data }, rid);
+  }
+
+  if (p === '/api/basket') {
+    const raw = url.searchParams.getAll('q').map((s) => s.trim()).filter(Boolean);
+    if (!raw.length) {
+      return fail(res, 400, 'MISSING_QUERY', '至少要给一件商品：用 ?q= 传，可以重复多次', rid);
+    }
+    if (raw.length > BASKET_MAX_ITEMS) {
+      return fail(res, 400, 'TOO_MANY_ITEMS',
+        '一次最多 ' + BASKET_MAX_ITEMS + ' 件（每件都要打一轮平台接口，再多会又慢又容易被限流）', rid);
+    }
+    const tooLong = raw.find((s) => s.length > BASKET_MAX_LEN);
+    if (tooLong) {
+      return fail(res, 400, 'QUERY_TOO_LONG',
+        '「' + tooLong.slice(0, 12) + '…」太长了，单件上限 ' + BASKET_MAX_LEN + ' 字', rid);
+    }
+
+    const thParam = Number(url.searchParams.get('th'));
+    const saveThreshold = Number.isFinite(thParam) && thParam >= 0 ? thParam : undefined;
+
+    const ckey = 'bsk:' + raw.map(normKey).join('|') + '|th' + (saveThreshold == null ? 'def' : saveThreshold);
+    const hit = cache.get(ckey);
+    if (hit) return json(res, 200, { ok: true, ...hit, cached: true }, rid);
+
+    // 逐件比价，单件失败不影响其余 —— 清单里少一件，也比整单报错有用
+    const settled = await settle(raw.map(async (q) => {
+      try { return { q, data: await getCompare(q, rid) }; }
+      catch (e) { return { q, error: String((e && e.message) || e) }; }
+    }));
+
+    // 先把平台显示名收齐，免得每件商品各带一份
+    const names = {};
+    settled.forEach((s) => {
+      if (s && s.data) (s.data.platforms || []).forEach((pf) => { names[pf.id] = pf.name; });
+    });
+
+    const items = settled.map((s) => {
+      const byPlatform = {};
+      if (s && s.data) {
+        (s.data.platforms || []).forEach((pf) => {
+          if (!pf.ok || !pf.lowest || pf.lowest.final == null) return;
+          byPlatform[pf.id] = pf.lowest.final;
+        });
+      }
+      return { q: (s && s.q) || '?', byPlatform, names };
+    });
+
+    const result = computeBasket(items, saveThreshold == null ? {} : { saveThreshold });
+
+    const firstOk = settled.find((s) => s && s.data);
+    const out = {
+      ...result,
+      queries: raw,
+      perQuery: settled.map((s) => {
+        const prices = {};
+        let best = null;
+        if (s && s.data) {
+          (s.data.platforms || []).forEach((pf) => {
+            if (!pf.ok || !pf.lowest || pf.lowest.final == null) return;
+            prices[pf.id] = pf.lowest.final;
+            // 把最优那条的标题和链接一起带出去，前端才能给出可点的「打开」。
+            // 不带的话前端只能显示价格，用户还得自己回主流程再搜一次。
+            if (!best || pf.lowest.final < best.final) {
+              best = {
+                platform: pf.id, name: pf.name, final: pf.lowest.final,
+                title: pf.lowest.title || '', url: pf.lowest.url || ''
+              };
+            }
+          });
+        }
+        return { q: (s && s.q) || '?', prices, best, error: (s && s.error) || null };
+      }),
+      unconfigured: firstOk ? (firstOk.data.unconfigured || []) : [],
+      failed: settled.filter((s) => !s || s.error).map((s) => ({ q: s && s.q, error: s && s.error })),
+      cached: false
+    };
+    cache.set(ckey, out);
+    return json(res, 200, { ok: true, ...out }, rid);
+  }
+
+  if (p === '/api/history') {
+    const platform = (url.searchParams.get('platform') || '').trim();
+    const sku = (url.searchParams.get('sku') || '').trim();
+    if (!platform || !sku) {
+      return fail(res, 400, 'MISSING_PARAM', '需要 platform 和 sku 两个参数', rid);
+    }
+    return json(res, 200, { ok: true, ...store.history(platform, sku) }, rid);
+  }
+
+  return fail(res, 404, 'NO_SUCH_ENDPOINT', '没有这个接口：' + p, rid);
+}
+
+/* ---------- 主服务 ---------- */
+const server = http.createServer(async (req, res) => {
+  const started = Date.now();
+  const rid = log.newRid();
+  const url = new URL(req.url, 'http://localhost');
+  const p = url.pathname;
+
+  res.setHeader('X-Request-Id', rid);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+
+  // 请求日志挂在 finish 上：拿到的是最终状态码，而不是我们以为的那个
+  res.on('finish', () => {
+    const ms = Date.now() - started;
+    metrics.request(p, res.statusCode, ms);
+    const level = res.statusCode >= 500 ? 'error' : res.statusCode === 429 ? 'warn' : 'info';
+    log[level]('http', { rid, method: req.method, path: p, status: res.statusCode, ms, ip: clientIp(req) });
+  });
+
+  try {
+    if (p.startsWith('/api/')) {
+      /* 接口只认 GET / HEAD。
+         不加这条的话 POST /api/compare 也会被当成一次正常比价，
+         白白消耗我们自己的联盟配额 —— 而这是最容易被人拿来刷的口子。 */
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return fail(res, 405, 'METHOD_NOT_ALLOWED', '接口只支持 GET', rid, { Allow: 'GET, HEAD' });
+      }
+
+      /* 限流只作用于 API，不碰静态资源。
+         拦静态文件会让页面直接白屏 —— 那不是限流，那是自残。 */
+      const rl = limiter.take(clientIp(req));
+      if (!rl.allowed) {
+        metrics.limited();
+        log.warn('ratelimited', { rid, ip: clientIp(req), path: p });
+        return fail(res, 429, 'RATE_LIMITED',
+          '请求太频繁了，请 ' + rl.retryAfter + ' 秒后再试。', rid, { 'Retry-After': String(rl.retryAfter) });
+      }
+
+      if (p === '/api/basket') {
+        const brl = basketLimiter.take(clientIp(req));
+        if (!brl.allowed) {
+          metrics.limited();
+          return fail(res, 429, 'RATE_LIMITED',
+            '省钱清单比较费额度，请 ' + brl.retryAfter + ' 秒后再试。', rid, { 'Retry-After': String(brl.retryAfter) });
+        }
+      }
+
+      return await api(req, res, p, url, rid);
+    }
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return fail(res, 405, 'METHOD_NOT_ALLOWED', '静态资源只支持 GET', rid);
+    }
+    return serveStatic(req, res, p);
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    log.error('unhandled', { rid, path: p, err: msg });
+    if (res.headersSent) return;
+    return fail(res, 500, 'INTERNAL', '服务内部错误，已记录（请求号 ' + rid + '）', rid);
+  }
+});
+
+server.listen(PORT, () => {
+  const list = status(process.env);
+  const on = list.filter((x) => x.configured);
+
+  process.stdout.write('\n  省心买 已启动\n');
+  process.stdout.write('  http://localhost:' + PORT + '\n\n');
+  process.stdout.write('  数据源：' + (on.length
+    ? on.map((x) => x.name + '（已配置）').join('、')
+    : '0 个已配置 —— 比价会走前端的手动比价模式') + '\n');
+
+  list.filter((x) => !x.configured).forEach((x) => {
+    process.stdout.write('    未配置 ' + x.name + '  需要 ' + x.envKeys.join(' / ') + '\n');
+  });
+
+  const s = store.stats();
+  process.stdout.write('\n  接口：/api/compare  /api/basket  /api/history  /api/health  /api/metrics\n');
+  process.stdout.write('  价格历史：' + (s.file || '（未落盘）') + '  已采 ' + s.points + ' 条 / ' + s.skus + ' 个商品\n');
+  process.stdout.write('  限流：突发 ' + RL_BURST + ' 次、' + RL_RATE + ' 次每秒　缓存：' + (CACHE_TTL / 1000) + ' 秒\n\n');
+
+  // 能不能真的落盘，启动时就要知道，而不是等用户比价完才发现没记住
+  if (!s.file) log.warn('store.disabled', { reason: '落盘不可用，历史只在内存里，重启即失' });
+});

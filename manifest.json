@@ -1,0 +1,30 @@
+{
+  "name": "省心买 · AI 比价与出行助手",
+  "short_name": "省心买",
+  "description": "横向拉平各平台到手价，算清一份清单该分几家买；机票火车票直达官方。不代下单、不代支付。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F5F6F8",
+  "theme_color": "#FF5A36",
+  "categories": ["shopping", "travel", "utilities"],
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "省钱清单",
+      "short_name": "清单",
+      "url": "./?open=basket",
+      "description": "一次比多件商品，算清该分几家买"
+    }
+  ]
+}
