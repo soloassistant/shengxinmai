@@ -6,7 +6,8 @@
 
 ![界面截图](docs/screenshot.png)
 
-> 已在跑：https://shengxinmai-compare.app.workbuddy.host/ （可装到桌面，像个 App 用）
+> 免费在线版（GitHub Pages）：https://soloassistant.github.io/shengxinmai/ （可装到桌面，像个 App 用）
+> 带服务端的版本：https://shengxinmai-compare.app.workbuddy.host/
 
 ---
 
