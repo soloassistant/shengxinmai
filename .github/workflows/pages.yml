@@ -1,0 +1,48 @@
+# 部署到 GitHub Pages（免费托管前端）
+# 推送到 main 后自动构建，把纯静态文件发布到 Pages。
+# 服务端 /api/* 在 Pages 上不可用 —— 前端会自动退回「手动比价」，
+# 这是产品的既定主形态（见 README 第九节）。
+name: Deploy to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 跑测试（有问题就拦住，别把坏版本发上去）
+        run: node test-parse.js && node server/test-server.js
+
+      # 只发布前端运行真正需要的文件：server/ 里有适配器逻辑和密钥模板，
+      # .data/ 是价格历史库，.github/ 是 CI 本身，都不该暴露在 Pages 上。
+      - name: 归集要发布的静态文件
+        run: |
+          mkdir -p publish
+          cp index.html app.js data.js styles.css sw.js manifest.json icon.svg .nojekyll publish/
+          ls -la publish/
+
+      - name: 上传静态文件
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: publish
+
+      - name: 发布
+        id: deployment
+        uses: actions/deploy-pages@v4

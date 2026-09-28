@@ -1,0 +1,2 @@
+# 让 GitHub Pages 不把下划线开头的目录当 Jekyll 处理
+# 本项目没有 Jekyll，加了它 Pages 会原样托管静态文件
