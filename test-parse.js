@@ -589,6 +589,68 @@ if (onlyTo.from === null && travelCard.includes('出发地') && !/¥\d/.test(tra
    它是纯 grep 源码字符串：把函数改名、甚至让它无条件 return null（功能全废），
    这条都照样通过 —— 不是验证，只是装饰。行为断言（上面 30 条）才是真的守卫。 */
 
+/* ---------- 回归：推荐类问法要出商品名，不是整句 ----------
+   实测踩过的坑：「推荐个耳机」的整句被当成商品名，弹出一张标题为
+   「推荐个耳机」的比价卡；真实模式下还会拿整句去搜平台。 */
+say('\n— 回归：推荐 / 求推荐 类问法 —');
+const recCases = [
+  ['推荐个耳机',         (r) => r.product === '耳机'],
+  ['推荐一下扫地机器人', (r) => r.product === '扫地机器人'],
+  ['推荐点儿零食',       (r) => r.product === '零食'],
+  ['推荐几款耳机',       (r) => r.product === '耳机'],
+  ['给我推荐个手机',     (r) => r.product === '手机'],
+  ['笔记本电脑求推荐',   (r) => r.product === '笔记本电脑'],
+  ['求推荐耳机',         (r) => r.product === '耳机'],
+  ['有没有好用的剃须刀', (r) => r.product === '剃须刀'],
+  ['哪款耳机好',         (r) => r.product === '耳机'],
+  // 剥完只剩「推荐」两个字 → 没给商品名，该反问而不是拿「推荐」去比价
+  ['给我推荐',           (r) => r.type === 'needProduct'],
+  ['推荐',               (r) => r.type === 'needProduct'],
+];
+for (const [q, okFn] of recCases) {
+  const r = SXM.parseIntent(q);
+  if (okFn(r || {})) { pass++; say(`✓  「${q}」→ ${r && r.type}${r && r.product ? ' · ' + r.product : ''}`); }
+  else { fail++; say(`✗  「${q}」→ ${JSON.stringify(r)}`); }
+}
+/* 量词表收窄的反面：这些「推荐 + 名词」不许被切坏。
+   「推荐算法」是商品名；双肩包 / 台灯 / 儿童玩具 更是量词表一旦放宽就会被吃掉的名词。 */
+const recKeepCases = [
+  ['推荐算法',     '推荐算法'],
+  ['推荐儿童玩具', '推荐儿童玩具'],
+  ['推荐双肩包',   '推荐双肩包'],
+  ['推荐台灯',     '推荐台灯'],
+  ['双肩包',       '双肩包'],
+  ['台灯',         '台灯'],
+  ['洗发水好',     '洗发水好'],   // 「好」只在整句是问句时才敢剥
+  ['AirPods Pro 3', 'AirPods Pro 3'],
+  ['iphone 16 多少钱', 'iphone 16'],
+];
+for (const [q, want] of recKeepCases) {
+  const r = SXM.parseIntent(q);
+  if (r && r.type === 'shop' && r.product === want) { pass++; say(`✓  没切坏：「${q}」→ ${want}`); }
+  else { fail++; say(`✗  切坏了：「${q}」→ ${JSON.stringify(r)}（期望 ${want}）`); }
+}
+
+/* ---------- 回归：问「吃什么」也算外卖 ----------
+   实测踩过的坑：「有什么好吃的」「附近有什么好吃的」掉进购物分支，
+   弹出一张标题为「有什么好吃的」的比价卡。
+   但「好吃的」这几个字本身也会出现在购物句里，所以它只是**弱信号**：
+   句子里一旦有购物词（买…），仍归购物。 */
+say('\n— 回归：问吃什么 也算外卖 —');
+const foodCases = [
+  '有什么好吃的', '附近有什么好吃的', '明天中午吃什么', '中午吃啥',
+  '晚饭吃什么好', '吃点什么', '点一份麻辣烫', '到上海的外卖',
+];
+for (const q of foodCases) {
+  const r = SXM.parseIntent(q);
+  if (r && r.type === 'food') { pass++; say(`✓  「${q}」→ 外卖`); }
+  else { fail++; say(`✗  「${q}」没进外卖 → ${JSON.stringify(r)}`); }
+}
+const weakFoodShop = SXM.parseIntent('好吃的饼干买哪个');
+if (weakFoodShop && weakFoodShop.type === 'shop') {
+  pass++; say('✓  弱信号不抢购物：「好吃的饼干买哪个」仍是购物（有「买」）');
+} else { fail++; say(`✗  弱外卖信号抢走了购物句：${JSON.stringify(weakFoodShop)}`); }
+
 /* ---------- 清单输入切分 ---------- */
 say('\n— 清单输入切分 —');
 const splitCases = [
