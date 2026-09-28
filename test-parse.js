@@ -517,6 +517,53 @@ for (const [okFlag, label] of noFallbackChecks) {
   if (okFlag) { pass++; say(`✓  ${label}`); } else { fail++; say(`✗  ${label}`); }
 }
 
+/* ---------- 回归：方向词 + 城市 = 出行，不是商品 ----------
+   实测踩过的坑：「去上海」「到北京」「飞成都」「回广州」「订张去上海的票」
+   「上海怎么走」全都被当成商品名，弹出一张标题为「去上海」的比价卡 ——
+   用户明摆着要出行，界面却在给他比价。方向词紧挨着城市，就是出行信号。 */
+say('\n— 回归：方向词 + 城市 要走出行 —');
+const travelCases = [
+  ['去上海',       (r) => r.type === 'both' && r.to === '上海'],
+  ['我要去上海',   (r) => r.type === 'both' && r.to === '上海'],
+  ['到北京',       (r) => r.type === 'both' && r.to === '北京'],
+  ['我想去成都',   (r) => r.type === 'both' && r.to === '成都'],
+  ['回广州',       (r) => r.type === 'both' && r.to === '广州'],
+  ['飞上海',       (r) => r.type === 'air'  && r.to === '上海'],
+  ['出差去深圳',   (r) => r.type === 'both' && r.to === '深圳'],
+  ['订张去上海的票', (r) => r.type === 'both' && r.to === '上海'],
+  ['上海怎么走',   (r) => r.type === 'both' && r.to === '上海'],
+  ['周末去杭州玩', (r) => r.type === 'both' && r.to === '杭州'],
+];
+for (const [q, okFn] of travelCases) {
+  const r = SXM.parseIntent(q);
+  if (okFn(r || {})) { pass++; say(`✓  「${q}」→ 出行（${r && r.type}${r && r.to ? ' · ' + r.to : ''}）`); }
+  else { fail++; say(`✗  「${q}」没走出行 → ${JSON.stringify(r)}`); }
+}
+// 带购物/外卖词的，一个都不许被出行抢走
+const notTravelCases = [
+  ['帮我买北京烤鸭',   (r) => r.type === 'shop'],
+  ['去上海买表',       (r) => r.type === 'shop'],
+  ['到上海的外卖',     (r) => r.type === 'food'],
+  ['去上海吃火锅',     (r) => r.type === 'food'],
+  ['飞利浦剃须刀多少钱', (r) => r.type === 'shop'],   // 「飞」在品牌里，不是「飞过去」
+  ['回力鞋',           (r) => r.type === 'shop'],      // 「回」在品牌名里
+  ['AirPods Pro 3',    (r) => r.type === 'shop' && r.product === 'AirPods Pro 3'],
+];
+for (const [q, okFn] of notTravelCases) {
+  const r = SXM.parseIntent(q);
+  if (okFn(r || {})) { pass++; say(`✓  没误伤：「${q}」仍是 ${r && r.type}`); }
+  else { fail++; say(`✗  误伤了：「${q}」→ ${JSON.stringify(r)}`); }
+}
+// 只给目的地时，出行卡要明说「还差一个出发地」，而不是给张比价卡
+sandbox.localStorage.removeItem('sxm.lastFrom');
+const onlyTo = SXM.parseIntent('去上海');
+const travelCard = SXM.renderRoute(onlyTo);
+if (onlyTo.from === null && travelCard.includes('出发地') && !/¥\d/.test(travelCard)) {
+  pass++; say('✓  只认出目的地时，出行卡明确问「还差一个出发地」，不夹带任何价格');
+} else { fail++; say('✗  出行卡渲染不对：' + JSON.stringify({ from: onlyTo.from, head: travelCard.slice(0, 60) })); }
+if (srcForFiller.includes('directionTravel')) { pass++; say('✓  方向词+城市 的出行判据还在（防回退）'); }
+else { fail++; say('✗  出行判据 directionTravel 没了'); }
+
 /* ---------- 清单输入切分 ---------- */
 say('\n— 清单输入切分 —');
 const splitCases = [

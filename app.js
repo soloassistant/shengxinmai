@@ -208,6 +208,23 @@
     return { from, to, guessed };
   }
 
+  /**
+   * 「去/到/往/飞/回 + 城市」就算出行意图 —— 哪怕用户没说「高铁」「机票」。
+   * 返回 { fly } ：是「飞」过去的就给飞机，否则火车+飞机都摆上。
+   * 只认紧挨着城市名的方向词，免得「帮我买北京烤鸭」这种被当成路线。
+   * 命不中就返回 null，交给上层继续按外卖/购物判。
+   */
+  function directionTravel(text, hits) {
+    if (!hits || !hits.length) return null;
+    for (let i = 0; i < hits.length; i++) {
+      const before = text.slice(Math.max(0, hits[i].idx - 2), hits[i].idx);
+      if (/[去到往回飞]/.test(before)) return { fly: /飞/.test(before) };
+    }
+    // 没有紧邻的方向词，但句子里在问「怎么走 / 怎么去 / 怎么坐车」
+    if (/怎么(?:走|去|到|坐车|坐地铁)|咋(?:走|去)|如何去|怎样去/.test(text)) return { fly: false };
+    return null;
+  }
+
   /* ======================================================================
      3. 意图解析
      ====================================================================== */
@@ -264,6 +281,22 @@
     if (hits.length >= 1 && /从\s*[^\s]{1,8}\s*到\s*[^\s，,。]{1,8}/.test(text)) {
       if (badDate) return needDate();
       return { type: 'needRoute', cities, date, raw: text };
+    }
+
+    /* ---- 出行：只说了「方向词 + 城市」，工具没说 → 按出行处理 ----
+       实测踩过的坑：「去上海」「到北京」「飞成都」「回广州」「订张去上海的票」
+       「上海怎么走」全都掉进了购物分支，弹出一张标题为「去上海」的比价卡 ——
+       用户明摆着要出行，界面却在给他比价。方向词紧挨着城市，就是出行信号。
+       但「去上海买表」「到上海的外卖」这类带购物/外卖词的，仍归各自的分支。 */
+    const dirTravel = directionTravel(text, hits);
+    if (dirTravel && !isFood && !RE_SHOP.test(text)) {
+      if (badDate) return needDate();
+      const r = resolveRoute(text, hits);
+      return {
+        type: (dirTravel.fly && !isRail) ? 'air' : 'both',
+        from: r.from, to: r.to, fromGuessed: r.guessed,
+        cities, date, raw: text
+      };
     }
 
     // ---- 外卖 ----
