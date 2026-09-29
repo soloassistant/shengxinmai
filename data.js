@@ -177,5 +177,8 @@ const ADAPTER_REGISTRY = [
   { id:'jd', name:'京东联盟', scope:'京东商品与佣金', person:'个人可注册（需流量证明）', env:'JD_UNION_APP_KEY / JD_UNION_APP_SECRET' },
   { id:'pdd', name:'多多进宝', scope:'拼多多商品与佣金', person:'个人可注册（最宽松）', env:'PDD_CLIENT_ID / PDD_CLIENT_SECRET' },
   { id:'meituan', name:'美团分销联盟', scope:'外卖 CPS', person:'需企业营业执照', env:'MEITUAN_APP_KEY / MEITUAN_APP_SECRET' },
-  { id:'ctrip', name:'携程开放平台', scope:'机票 / 酒店分销', person:'需企业营业执照', env:'CTRIP_APP_KEY / CTRIP_APP_SECRET' }
+  { id:'ctrip', name:'携程开放平台', scope:'机票 / 酒店分销', person:'需企业营业执照', env:'CTRIP_APP_KEY / CTRIP_APP_SECRET' },
+  /* 机票实时报价的可行通道：聚合型 API 对个人开放，跟上面携程那条是两条不同的路。
+     2026-09-29 查实：ignav 免费 1000 次、个人自助注册、market=CN 出人民币价。 */
+  { id:'ignav', name:'ignav 航班数据', scope:'机票实时报价（按价格排序）', person:'个人可注册（免费 1000 次，无需信用卡）', env:'IGNAV_API_KEY' }
 ];

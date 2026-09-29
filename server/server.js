@@ -35,6 +35,7 @@ const fs   = require('node:fs');
 const path = require('node:path');
 
 const { compare, status } = require('./adapters');
+const flightAdapter = require('./adapters/ignav');
 const log = require('./lib/logger');
 const { createCache, normKey } = require('./lib/cache');
 const { createRateLimiter } = require('./lib/ratelimit');
@@ -62,6 +63,17 @@ const RL_RATE   = Number(process.env.SXM_RL_RATE) || 1;
 
 const BASKET_MAX_ITEMS = 8;      // 一件商品 = 一组外部查询，8 件已经要打 24 次
 const BASKET_MAX_LEN   = 40;     // 单个关键词长度上限
+
+/* 没接机票接口时，返回给前端的「手动查」入口。
+   注意：这里只有跳转链接，**没有任何价格数字** —— 拿不到真实价就不填空数。 */
+const FLIGHT_PLATFORMS_FALLBACK = [
+  { id: 'qunar', name: '去哪儿', abbr: '去', cls: 'pf-qunar', tag: '低价排序',
+    desc: '聚合各家代理报价，适合先看价格下限' },
+  { id: 'ctrip', name: '携程', abbr: '携', cls: 'pf-ctrip', tag: '航线最全',
+    desc: '改签退票规则写得清楚' },
+  { id: 'fliggy', name: '飞猪', abbr: '飞', cls: 'pf-fliggy', tag: '阿里系',
+    desc: '阿里系票价与会员权益打通常用' }
+];
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -201,6 +213,54 @@ async function getCompare(keyword, rid) {
   return data;
 }
 
+/* ---------- 机票（按航线查，不走关键词） ----------
+   为什么要单独一个函数：机票不是"关键词比价"，它的入参是
+   出发地 / 目的地 / 日期，而且返回的是一张按价格排好序的航班表。
+   塞进 /api/compare 会变成四不像。 */
+async function getFlights(q, rid) {
+  const key = 'flt:' + [q.from, q.to, q.date, q.returnDate || '', q.cabin || 'economy', q.market || 'CN']
+    .join('|').toLowerCase();
+  const hit = cache.get(key);
+  if (hit) {
+    log.debug('flights.cacheHit', { rid, from: q.from, to: q.to });
+    return { ...hit, cached: true };
+  }
+
+  const adapter = flightAdapter;
+  if (!adapter.isConfigured(process.env)) {
+    // 没密钥就如实说，不给假价格 —— 前端据此退回「手动查」入口
+    const data = {
+      ok: true,
+      configured: false,
+      query: q,
+      flights: [],
+      note: '机票实时报价未接入。配置 IGNAV_API_KEY 后这里会返回按价格排好序的航班表。',
+      platforms: FLIGHT_PLATFORMS_FALLBACK
+    };
+    cache.set(key, data);
+    return { ...data, cached: false };
+  }
+
+  const r = await adapter.searchRoute(q, process.env);
+  const data = {
+    ok: true,
+    configured: true,
+    query: q,
+    at: r.at || Date.now(),
+    market: r.market || q.market || 'CN',
+    count: (r.items || []).length,
+    flights: r.items || [],
+    note: r.note || '',
+    unconfigured: !!r.unconfigured
+  };
+  metrics.platform(adapter.id, !r.note || !!r.items.length, 0);
+
+  /* 没数据时不缓存 —— 缓存一个空结果会把"临时故障"钉死几分钟，
+     用户重试也还是空的，看起来就像坏了。有数据才缓存。 */
+  if (data.flights.length) cache.set(key, data);
+  return data;
+}
+
 /* ---------- 路由 ---------- */
 async function api(req, res, p, url, rid) {
   if (p === '/api/health') {
@@ -229,6 +289,36 @@ async function api(req, res, p, url, rid) {
         adapters: status(process.env).map((a) => ({ id: a.id, configured: a.configured }))
       })
     }, rid);
+  }
+
+  /* 机票：按航线查，返回按价格升序排好的航班表。
+     入参是 from/to/date 而不是关键词 —— 这是它和 /api/compare 的根本区别。 */
+  if (p === '/api/flights') {
+    const from = (url.searchParams.get('from') || '').trim();
+    const to   = (url.searchParams.get('to')   || '').trim();
+    const date = (url.searchParams.get('date') || '').trim();
+    if (!from || !to) return fail(res, 400, 'MISSING_ROUTE', '缺少出发地或目的地（from / to）', rid);
+    if (!date)        return fail(res, 400, 'MISSING_DATE', '缺少出发日期（date，格式 2026-10-20）', rid);
+    // 三字码或城市名都收，但长度要卡死，避免被当成注入载体
+    if (from.length > 24 || to.length > 24) {
+      return fail(res, 400, 'ROUTE_TOO_LONG', '出发地 / 目的地太长了', rid);
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return fail(res, 400, 'BAD_DATE_FORMAT', '日期格式应为 YYYY-MM-DD', rid);
+    }
+    const rt = (url.searchParams.get('return') || '').trim();
+    if (rt && !/^\d{4}-\d{2}-\d{2}$/.test(rt)) {
+      return fail(res, 400, 'BAD_DATE_FORMAT', '返程日期格式应为 YYYY-MM-DD', rid);
+    }
+
+    const data = await getFlights({
+      from, to, date,
+      returnDate: rt || null,
+      cabin: (url.searchParams.get('cabin') || '').trim() || 'economy',
+      market: (url.searchParams.get('market') || '').trim() || 'CN',
+      adults: Number(url.searchParams.get('adults')) || 1
+    }, rid);
+    return json(res, 200, data, rid);
   }
 
   if (p === '/api/compare') {

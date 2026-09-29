@@ -191,15 +191,84 @@ const airOk = ctrip && ctrip.includes('oneway-can-ctu') && ctrip.includes('depda
 if (airOk) { pass++; say(`✓  携程链接用对了三字码\n     ${ctrip}`); }
 else { fail++; say(`✗  携程链接不对：${ctrip}`); }
 
-// 缺出发地时必须反问，而不是默认填一个城市
+// 缺出发地时必须**主动请求地址**，而不是默认填一个城市
 const ask = SXM.renderRoute({ type: 'air', from: null, to: '成都', cities: ['成都'], date: null, raw: '' });
-if (ask.includes('还差一个出发地')) { pass++; say('✓  缺出发地 → 反问，没有瞎猜城市'); }
-else { fail++; say('✗  缺出发地时没有正确反问'); }
+if (ask.includes('告诉我出发地')) { pass++; say('✓  缺出发地 → 向用户请求地址，没有瞎猜城市'); }
+else { fail++; say('✗  缺出发地时没有正确请求地址'); }
+
+/* 请求地址不能只是一句话：要给可点的城市快捷键（data-fill），
+   点一下就补进输入框。这是"向用户请求地址"的实际可用性部分。 */
+const hasQuick = /class="chip"[^>]*data-fill="/.test(ask);
+if (hasQuick) { pass++; say('✓  请求地址时给出可点的城市快捷键（data-fill）'); }
+else { fail++; say('✗  请求地址时没有城市快捷键，用户只能自己打字'); }
+
+// 已经认出「成都」，就不该再推一个含「成都」的快捷键 —— 点了也不解决问题
+/* ⚠ 不能只精确匹配 data-fill="成都"：已知一端时快捷键被拼成了
+   「成都到成都」，精确匹配会漏掉它（变异实验当场证明过）。
+   所以这里匹配「任何以成都开头或结尾的 fill」。 */
+const dupSelf = /data-fill="(成都到[^"]+|成都)"/.test(ask);
+if (!dupSelf) { pass++; say('✓  已认出的城市不再出现在快捷键里（点了没意义）'); }
+else { fail++; say('✗  快捷键里混进了已认出的城市「成都」'); }
+
+/* 已知一端时，快捷键要拼成完整路线（如「北京到成都」），
+   而不是只给一个城市名 —— 用户点一下就该能直接查。 */
+const filled = /data-fill="北京到成都"/.test(ask);
+if (filled) { pass++; say('✓  已知一端时快捷键拼成完整路线（北京到成都）'); }
+else { fail++; say('✗  已知一端时快捷键只给了半截，用户还得再补一次'); }
+
+// 两端都缺时，快捷键就只填城市名
+const askBoth = SXM.renderRoute({ type: 'needRoute', from: null, to: null, cities: [], date: null, raw: '' });
+const bothOk = /data-fill="北京"/.test(askBoth) && askBoth.includes('出发地和目的地');
+if (bothOk) { pass++; say('✓  两端都缺时请求两个地址，快捷键只填城市名'); }
+else { fail++; say('✗  两端都缺时的请求文案/快捷键不对'); }
 
 // 没给日期时要标注是默认值，不能伪装成用户说的
 const noDate = SXM.renderRoute({ type: 'rail', from: '北京', to: '上海', cities: ['北京', '上海'], date: null, raw: '' });
 if (noDate.includes('默认明天')) { pass++; say('✓  未给日期 → 卡面明示“默认明天”'); }
 else { fail++; say('✗  未给日期时没有标注默认值'); }
+
+/* ==========================================================================
+   航班表：**自动按价格排好序并给出价格** —— 这是用户点名的需求
+   --------------------------------------------------------------------------
+   端到端验过：最初 renderFlightTable 是照单渲染、不排序的（排序只在服务端），
+   所以这里**故意喂乱序数据**，逼渲染层自己排一次。喂排好序的数据验等于没验。
+   ========================================================================== */
+const shuffled = {
+  ok: true, count: 3,
+  flights: [
+    { price: 1580, carrier: '南方航空', flightNo: 'CZ3901', stops: 0, stopsText: '直飞',
+      depAirport: 'PEK', arrAirport: 'SHA', depTime: '09:00', arrTime: '11:10', durationMin: 130, symbol: '¥' },
+    { price: 720,  carrier: '东方航空', flightNo: 'MU5101', stops: 0, stopsText: '直飞',
+      depAirport: 'PKX', arrAirport: 'PVG', depTime: '06:30', arrTime: '08:40', durationMin: 130, symbol: '¥' },
+    { price: 1150, carrier: '海南航空', flightNo: 'HU7605', stops: 1, stopsText: '经停 1 站',
+      depAirport: 'PEK', arrAirport: 'SHA', depTime: '14:20', arrTime: '18:05', durationMin: 225, symbol: '¥' }
+  ]
+};
+const flHtml = SXM.renderFlightTable(shuffled);
+const flPrices = [...flHtml.matchAll(/fl-amount">([^<]+)</g)].map((m) => m[1]);
+const flOk = JSON.stringify(flPrices) === JSON.stringify(['¥720', '¥1150', '¥1580']);
+if (flOk) { pass++; say('✓  航班表把乱序数据排成价格升序：' + flPrices.join(' ')); }
+else { fail++; say('✗  航班表没有按价格排序，实际 ' + flPrices.join(' ')); }
+
+// 价格必须真的写在行里 —— 「给出价格」不是「给你个链接自己去看」
+const hasPrices = /fl-amount">¥\d+/.test(flHtml);
+if (hasPrices) { pass++; say('✓  每行都直接写了价格（不用点开看）'); }
+else { fail++; say('✗  航班行里没有价格数字'); }
+
+// 直飞 / 经停必须能一眼分辨
+const hasStops = flHtml.includes('直飞') && flHtml.includes('经停 1 站');
+if (hasStops) { pass++; say('✓  直飞与经停都标出来了'); }
+else { fail++; say('✗  直飞/经停信息缺失'); }
+
+// 最便宜那条要高亮 —— 否则"排好序"对用户没有视觉抓手
+const hasBest = /fl-best/.test(flHtml) && flHtml.includes('最便宜');
+if (hasBest) { pass++; say('✓  最便宜的一条有高亮与标签'); }
+else { fail++; say('✗  最便宜的一条没有高亮'); }
+
+// 航空器为空、价格缺失的脏数据不能把整表搞崩
+const dirty = SXM.renderFlightTable({ ok: true, flights: [{ price: null, carrier: 'X' }, { price: 500, carrier: 'Y', stopsText: '直飞' }] });
+if (typeof dirty === 'string' && dirty.includes('¥500')) { pass++; say('✓  混入脏数据时，好数据照样渲染'); }
+else { fail++; say('✗  脏数据把航班表搞崩了'); }
 
 /* ---------- 距离计算：拿真实距离做基准，不对就是公式写错了 ---------- */
 say('\n— 城市距离（大圆距离，与公开真实值比对）—');

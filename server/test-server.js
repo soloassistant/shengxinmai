@@ -181,6 +181,110 @@ const jdStamp = jd._gmt8Stamp();
 check(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(jdStamp), '京东时间戳格式 = yyyy-MM-dd HH:mm:ss：' + jdStamp);
 
 /* ==========================================================================
+   4.5 机票解析 —— 用的是 ignav 官方文档给的真实响应结构
+   --------------------------------------------------------------------------
+   为什么这层测试不能省：机票要「自动排好序并给出价格」，排序和价格都长在
+   解析层上。字段名一旦对不上，界面就会静默变空 —— 而用户看到的将是
+   「一个航班都没有」，不是「字段错了」。所以这里逐字段钉死。
+   样例结构来自 ignav.com 文档与其 skill 文档（两处一致）。
+   ========================================================================== */
+say('\n— 机票解析（ignav）—');
+
+const ignav = require('./adapters/ignav');
+
+// 官方文档的响应样例（含 1 个直飞、1 个经停，price 用 CNY）
+const ignavBody = {
+  itineraries: [
+    {
+      ignav_id: 'it-1',
+      price: { amount: 1280, currency: 'CNY' },
+      outbound: {
+        carrier: '中国国际航空',
+        duration_minutes: 135,
+        segments: [{
+          marketing_carrier_code: 'CA',
+          marketing_carrier_name: '中国国际航空',
+          flight_number: '1833',
+          departure_airport: 'PEK',
+          departure_time_local: '2026-10-20T08:30:00',
+          arrival_airport: 'SHA',
+          arrival_time_local: '2026-10-20T10:45:00',
+          duration_minutes: 135,
+          aircraft: 'Airbus A330'
+        }]
+      },
+      cabin_class: 'economy',
+      bags: { carry_on: 1, checked: 1 }
+    },
+    {
+      ignav_id: 'it-2',
+      price: { amount: 720, currency: 'CNY' },
+      outbound: {
+        carrier: '厦门航空',
+        duration_minutes: 305,
+        segments: [
+          {
+            marketing_carrier_code: 'MF',
+            marketing_carrier_name: '厦门航空',
+            flight_number: '8101',
+            departure_airport: 'PEK',
+            departure_time_local: '2026-10-20T06:10:00',
+            arrival_airport: 'XMN',
+            arrival_time_local: '2026-10-20T09:20:00',
+            duration_minutes: 190
+          },
+          {
+            marketing_carrier_code: 'MF',
+            marketing_carrier_name: '厦门航空',
+            flight_number: '8256',
+            departure_airport: 'XMN',
+            departure_time_local: '2026-10-20T10:40:00',
+            arrival_airport: 'SHA',
+            arrival_time_local: '2026-10-20T11:15:00',
+            duration_minutes: 115
+          }
+        ]
+      },
+      cabin_class: 'economy',
+      bags: { carry_on: 1, checked: 0 }
+    }
+  ]
+};
+
+const ignavList = ignav._extractList(ignavBody);
+check(ignavList.length === 2, '机票能从 itineraries 里取出 2 条，实际 ' + ignavList.length);
+
+const f1 = ignav._normalizeOne(ignavList[0], '¥');
+check(f1.price === 1280, '机票价格解析正确（1280），实际 ' + f1.price);
+check(f1.currency === 'CNY', '币种解析为 CNY');
+check(f1.stops === 0 && f1.stopsText === '直飞', '单航段判为直飞');
+check(f1.depTime === '08:30' && f1.arrTime === '10:45', '起降时刻切成 HH:MM：' + f1.depTime + '→' + f1.arrTime);
+check(ignav._humanMin(f1.durationMin) === '2小时15分', '时长转人话：' + ignav._humanMin(f1.durationMin));
+check(f1.carrier === '中国国际航空', '航司名解析正确');
+
+const f2 = ignav._normalizeOne(ignavList[1], '¥');
+check(f2.stops === 1 && f2.stopsText === '经停 1 站', '两航段判为经停 1 站');
+check(f2.depAirport === 'PEK' && f2.arrAirport === 'SHA', '经停航班取首段出发、末段到达：' + f2.depAirport + '→' + f2.arrAirport);
+
+// 排序：按价格升序 —— 这正是「自动排序好」的核心
+/* ⚠ 这里必须**调真实函数**验排序，不能自己 sort 一遍再断言 ——
+   那样断言的是我自己的 sort，跟被测代码无关（变异实验证明过：把
+   adapter 里的排序去掉，那种断言照样全绿）。 */
+check(typeof ignav.sortByPrice === 'function', 'adapter 暴露了排序函数（否则下面验的是空气）');
+const sorted = ignav.sortByPrice(ignavList.map((x) => ignav._normalizeOne(x, '¥')));
+check(sorted[0].price === 720 && sorted[1].price === 1280, '机票按价格升序排好（720 在前）');
+
+// 坏数据不许抛异常，只返回 null —— 一条脏数据不能拖垮整张表
+check(ignav._normalizeOne({ price: {} }) === null, '没有价格的行程返回 null 而不是崩掉');
+check(ignav._normalizeOne({}) === null, '空对象返回 null');
+check(ignav._extractList({ data: { itineraries: [] } }).length === 0, 'data.itineraries 空数组也能正确取出');
+check(ignav._extractList(null).length === 0, 'null 返回空数组');
+
+// 未配密钥时必须明说，不能假装有数据
+check(ignav.isConfigured({}) === false, '无 IGNAV_API_KEY 时 isConfigured=false');
+check(ignav.isConfigured({ IGNAV_API_KEY: 'k' }) === true, '有 IGNAV_API_KEY 时 isConfigured=true');
+
+/* ==========================================================================
    5. 解析层遇到不认识的字段，必须自曝而不是静默返回空
    ========================================================================== */
 say('\n— 失败可诊断性 —');
@@ -283,6 +387,22 @@ say('\n— 聚合并发 —');
       const traversal = await fetch(base + '/../../etc/passwd');
       check(traversal.status === 403 || traversal.status === 404,
         '路径穿越被挡住（返回 ' + traversal.status + '）');
+
+      /* ---- 机票接口：没密钥时必须如实说，且绝不能给假价格 ---- */
+      const fl = await (await fetch(base + '/api/flights?from=BJS&to=SHA&date=2026-10-20')).json();
+      check(fl.ok === true, '/api/flights 无密钥时仍返回 200 与完整结构');
+      check(fl.configured === false, '无密钥时 configured=false —— 前端据此退回手动查');
+      check(Array.isArray(fl.flights) && fl.flights.length === 0,
+        '无密钥时 flights 为空数组，不给任何假价格');
+      check(Array.isArray(fl.platforms) && fl.platforms.length > 0,
+        '无密钥时返回手动查入口（去哪儿 / 携程 / 飞猪）');
+
+      const flNoRoute = await fetch(base + '/api/flights?from=BJS');
+      check(flNoRoute.status === 400, '缺目的地返回 400');
+      const flNoDate = await fetch(base + '/api/flights?from=BJS&to=SHA');
+      check(flNoDate.status === 400, '缺日期返回 400');
+      const flBadDate = await fetch(base + '/api/flights?from=BJS&to=SHA&date=2026/10/20');
+      check(flBadDate.status === 400, '日期格式不对返回 400（不要 2026/10/20 这种）');
     }
   } finally {
     proc.kill();

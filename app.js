@@ -91,6 +91,12 @@
   function fmtHuman(d) {
     return (d.getMonth() + 1) + '月' + d.getDate() + '日 周' + WEEK_CN[d.getDay()];
   }
+  /** 时间戳 →「18:35」。用于标注价格是什么时候查的（价格按小时在变）。 */
+  function fmtClock(ts) {
+    const d = new Date(Number(ts) || Date.now());
+    const p = (n) => String(n).padStart(2, '0');
+    return p(d.getHours()) + ':' + p(d.getMinutes());
+  }
 
   /**
    * 从一句话里抠日期。
@@ -971,22 +977,51 @@
   /* ======================================================================
      6. 渲染：出行
      ====================================================================== */
+  /* 常用城市：缺地址时给快捷键，省得用户再打一遍字。
+     只放最常飞的一批，不做全量字典 —— 太长反而不好点。 */
+  const QUICK_CITIES = ['北京', '上海', '广州', '深圳', '成都', '杭州', '西安', '重庆', '南京', '武汉'];
+
+  /**
+   * 缺出发地 / 目的地时，**主动向用户请求地址**。
+   * 不只丢一句话：给可点的城市快捷键，点一下就补进输入框。
+   */
   function renderRoute(intent) {
     const { from, to, date, type } = intent;
 
-    // 缺出发地或目的地 → 反问，不瞎猜
     if (!from || !to) {
-      const miss = !from ? '出发地' : '目的地';
+      const needFrom = !from;
+      const needTo   = !to;
+      const missText = needFrom && needTo ? '出发地和目的地'
+                     : needFrom ? '出发地' : '目的地';
+      // 把已认出的那个城市填进提示，减少用户重复输入
+      const known = from || to;
+
+      const chips = QUICK_CITIES.map((c) => {
+        // 已经认出另一个城市时，点同名城市没意义
+        if (known && c === known) return '';
+        const fill = known
+          ? (needFrom ? c + '到' + known : known + '到' + c)
+          : c;
+        return `<button class="chip" type="button" data-fill="${esc(fill)}">${esc(c)}</button>`;
+      }).join('');
+
       return `
         <div class="card-head">
           <div>
-            <div class="card-title">还差一个${miss}</div>
-            <div class="card-note">把话说全我就能直接给你订票页，比如「北京到上海 下周三」</div>
+            <div class="card-title">告诉我${missText}</div>
+            <div class="card-note">${known
+              ? '已经认出「' + esc(known) + '」，再补上另一个就能查'
+              : '比如「北京到上海 下周三」'}</div>
           </div>
           <span class="tag tag-trip">出行</span>
         </div>
         <div class="banner banner-warn"><span class="banner-ico">?</span>
-          <span>现在只认出了：${esc(intent.cities.join('、') || '（没有城市）')}。补上${miss}再说一遍就行。</span></div>`;
+          <span>${intent.cities && intent.cities.length
+            ? '现在只认出了：' + esc(intent.cities.join('、')) + '。'
+            : ''}${esc(missText)}都给我，我才能把航班和车次列出来 —— 猜一个给你，
+            查出来大概率是错的航线。</span></div>
+        <div class="mini-title">常用城市（点一下补进输入框）</div>
+        <div class="chips">${chips}</div>`;
     }
 
     // 日期没给 → 按明天算，但必须在卡上写明这是默认值
@@ -1062,6 +1097,13 @@
     }
 
     /* ---- 飞机 ---- */
+    /* ---- 飞机 ----
+       两种形态：
+         A. 接了实时报价（/api/flights 有 configured:true）→ 直接给**排好序的航班表**，
+            用户不用一个一个点开看价。表格由 renderFlightTable() 渲染。
+         B. 没接 → 仍给各平台入口（手动查）。**绝不编价格**。
+       这两条路的分岔在渲染时决定不了（要等接口回来），所以先把占位容器放这儿，
+       接口回来后用 fillFlights() 把内容填进去。 */
     let airBlock = '';
     if (type === 'air' || type === 'both') {
       const rows = FLIGHT_PLATFORMS.map((p) => {
@@ -1087,7 +1129,10 @@
 
       airBlock = `
         <div class="mini-title">机票</div>
-        <div class="rows">${rows}</div>
+        <div class="flights" data-flights="${esc(from)}|${esc(to)}|${esc(iso)}">
+          <div class="flights-wait">正在查这条航线的实时票价…</div>
+        </div>
+        <div class="rows flights-manual" hidden>${rows}</div>
         <div class="banner banner-warn" style="margin-top:10px">
           <span class="banner-ico">※</span>
           <span>机票代理报价差得很多，<strong>同一航班不同渠道能差出一顿饭钱</strong>。比完价再看一眼退改签——
@@ -1248,6 +1293,8 @@
     if (retryFor) el.dataset.retryFor = retryFor;
     if (retryBasket) el.dataset.retryBasket = '1';
     stream.appendChild(el);
+    // 出行卡里的航班表要先插占位再异步填 —— 界面不卡住，也不会先显示假数据
+    if (/data-flights=/.test(html)) fillFlights(el);
     scrollDown();
     return el;
   }
@@ -1724,6 +1771,153 @@
       if (SERVER_OK !== true) SERVER_OK = false;
       return null;
     }
+  }
+
+  /**
+   * 查一条航线的实时票价。
+   * 返回 null 表示「拿不到」—— 调用方据此退回手动查入口，**不编价格**。
+   */
+  async function liveFlights(from, to, date) {
+    lastLiveError = '';
+    if (SERVER_OK === false) return null;
+    const f = CITY_AIR[from];
+    const t = CITY_AIR[to];
+    // 没有三字码就查不了 —— 这也是「拿不到」的一种，如实退回手动
+    if (!f || !t) return null;
+    try {
+      const qs = 'from=' + encodeURIComponent(f.toUpperCase())
+               + '&to='   + encodeURIComponent(t.toUpperCase())
+               + '&date=' + encodeURIComponent(date)
+               + '&market=CN';
+      const res = await fetch('/api/flights?' + qs, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        lastLiveError = (body && body.error && body.error.message) || ('服务端返回 HTTP ' + res.status);
+        return null;
+      }
+      const data = await res.json();
+      if (!data || !data.ok) {
+        lastLiveError = (data && data.error && data.error.message) || '服务端返回了不完整的结果';
+        return null;
+      }
+      SERVER_OK = true;
+      // 没接密钥 / 没查到航班 —— 都不是错误，退回手动入口即可，别吓用户
+      if (!data.configured || !Array.isArray(data.flights) || !data.flights.length) {
+        flightsNote = data.note || '';
+        return null;
+      }
+      return data;
+    } catch (e) {
+      lastLiveError = (typeof navigator !== 'undefined' && navigator && navigator.onLine === false)
+        ? '当前设备没有联网'
+        : String((e && e.message) || e);
+      return null;
+    }
+  }
+
+  /** 分钟 →「2小时15分」 */
+  function humanMin2(min) {
+    const m = Number(min) || 0;
+    if (!m) return '';
+    const h = Math.floor(m / 60), r = m % 60;
+    return h ? h + '小时' + (r ? r + '分' : '') : r + '分';
+  }
+
+  /**
+   * 航班表：**按价格从低到高排好**，一行一个航班，价格直接写在行里。
+   * 用户要的就是这个 —— 不用一个一个点开看价。
+   */
+  function renderFlightTable(data) {
+    /* 渲染层**自己再排一次**，不假设上游一定排好了。
+       为什么不用"服务端已经排过"来说服自己：端到端验过，服务端排序一旦失效
+       （或将来换成别的数据源、或有人改坏了 sortByPrice），表格会安静地乱序 ——
+       而「自动排好序」正是这个功能对用户的全部承诺。排序成本近乎零，两处都排。 */
+    const list = (data.flights || [])
+      .slice()
+      .sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0))
+      .slice(0, 12);
+    const cheapest = list[0] ? list[0].price : null;
+
+    const rows = list.map((f, i) => {
+      const isBest = i === 0;
+      const bags = f.bags
+        ? '行李 ' + (f.bags.carry_on || 0) + ' 手提' + (f.bags.checked ? ' + ' + f.bags.checked + ' 托运' : '')
+        : '';
+      const meta = [
+        esc(f.stopsText),
+        humanMin2(f.durationMin) ? '约 ' + humanMin2(f.durationMin) : '',
+        bags,
+        f.selfTransfer ? '需自行转机' : ''
+      ].filter(Boolean).join(' · ');
+
+      return `
+        <div class="fl-row${isBest ? ' fl-best' : ''}">
+          <div class="fl-time">
+            <div class="fl-hm">${esc(f.depTime || '—')}</div>
+            <div class="fl-port">${esc(f.depAirport || '')}</div>
+          </div>
+          <div class="fl-mid">
+            <div class="fl-arrow">→</div>
+            <div class="fl-meta">${esc(meta)}</div>
+          </div>
+          <div class="fl-time fl-time-arr">
+            <div class="fl-hm">${esc(f.arrTime || '—')}</div>
+            <div class="fl-port">${esc(f.arrAirport || '')}</div>
+          </div>
+          <div class="fl-main">
+            <div class="fl-carrier">${esc(f.carrier)}${f.flightNo ? ' ' + esc(f.flightNo) : ''}</div>
+            ${isBest ? '<div class="fl-tag">最便宜</div>' : ''}
+          </div>
+          <div class="fl-price">
+            <div class="fl-amount">${esc(f.symbol || '¥')}${Math.round(f.price)}</div>
+            <div class="fl-unit">起</div>
+          </div>
+        </div>`;
+    }).join('');
+
+    const when = data.at ? fmtClock(data.at) : '';
+    return `
+      <div class="fl-head">
+        <span>共 ${data.count || list.length} 个航班，<strong>已按价格从低到高排好</strong></span>
+        ${when ? `<span class="fl-at">查于 ${esc(when)}</span>` : ''}
+      </div>
+      <div class="fl-list">${rows}</div>
+      <div class="banner banner-warn" style="margin-top:8px">
+        <span class="banner-ico">※</span>
+        <span>价格是<strong>查询时刻的实时报价</strong>，会随余票和舱位变动；「起」表示该航班最低舱位。
+        点右侧链接进官方页面看最终价与退改签规则 —— 便宜票往往改不起。</span>
+      </div>`;
+  }
+
+  /* 航班接口的说明文字（拿不到时用），和「最近一次错误」分开存 */
+  let flightsNote = '';
+
+  /**
+   * 页面渲染后，把占位容器换成真实航班表。
+   * 拿不到就展开「手动查」入口，并把原因说清楚（静默失败是 bug）。
+   */
+  function fillFlights(root) {
+    const box = root && root.querySelector ? root.querySelector('.flights[data-flights]') : null;
+    if (!box) return;
+    const [from, to, iso] = String(box.getAttribute('data-flights') || '').split('|');
+    if (!from || !to || !iso) return;
+
+    const manual = root.querySelector('.flights-manual');
+
+    liveFlights(from, to, iso).then((data) => {
+      if (data) {
+        box.innerHTML = renderFlightTable(data);
+        return;
+      }
+      // 拿不到 → 摆手动入口。绝不填假数字。
+      box.innerHTML = `
+        <div class="flights-na">
+          <div class="flights-na-t">这条航线暂时拿不到实时报价</div>
+          <div class="flights-na-d">${esc(flightsNote || lastLiveError || '实时报价接口未接入')}
+          —— 下面给你各平台的直查入口，点进去看的就是实时价。</div>
+        </div>`;
+      if (manual) manual.hidden = false;
+    });
   }
 
   form.addEventListener('submit', (e) => {
@@ -2238,6 +2432,7 @@
   window.SXM = {
     parseIntent, parseDate, findCities, extractProduct, isMeaningfulProduct,
     renderShop, renderShopLive, renderFood, renderRoute,
+    renderFlightTable, humanMin2,
     greatCircle, estimateModes, humanHours, modeVerdict, CITY_GEO,
     probeHealth, liveCompare,
     spark, demoLive, renderBasket, renderBasketOffline, renderError,

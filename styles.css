@@ -178,6 +178,57 @@ p{ margin:0; }
 .tag-mute{ background:var(--surface-2); color:var(--ink-3); }
 .tag-ok{ background:#E7F7EE; color:#0E7C3D; }
 
+/* ---------- 航班表（按价格排好，不用一个个点开） ---------- */
+.fl-head{
+  display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+  font-size:12px; color:var(--ink-2); margin:2px 0 8px;
+}
+.fl-head strong{ color:var(--ink); }
+.fl-at{ font-size:11px; color:var(--ink-3); white-space:nowrap; }
+.fl-list{ display:flex; flex-direction:column; gap:6px; }
+.fl-row{
+  display:grid;
+  grid-template-columns:auto auto auto 1fr auto;
+  align-items:center;
+  gap:10px;
+  padding:10px 12px;
+  border:1px solid var(--line);
+  border-radius:var(--radius-sm);
+  background:var(--surface);
+  transition:border-color .15s, box-shadow .15s;
+}
+.fl-row:hover{ border-color:#D6DBE3; box-shadow:var(--shadow-1); }
+/* 最便宜那条要一眼看出来 —— 这正是"排好序"的价值 */
+.fl-best{ border-color:#FFD3C7; background:#FFFCFB; }
+.fl-time{ text-align:center; min-width:52px; }
+.fl-time-arr{ text-align:center; }
+.fl-hm{ font-size:15px; font-weight:700; letter-spacing:.3px; font-variant-numeric:tabular-nums; }
+.fl-port{ font-size:10px; color:var(--ink-3); letter-spacing:.5px; margin-top:-1px; }
+.fl-mid{ text-align:center; min-width:44px; }
+.fl-arrow{ font-size:12px; color:var(--ink-3); line-height:1; }
+.fl-meta{ font-size:10px; color:var(--ink-3); white-space:nowrap; margin-top:1px; }
+.fl-main{ min-width:0; }
+.fl-carrier{
+  font-size:12.5px; font-weight:600;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.fl-tag{
+  display:inline-block; margin-top:3px; font-size:10px; font-weight:700;
+  background:#FFEDE7; color:#C2410C; border-radius:4px; padding:1px 5px;
+}
+.fl-price{ text-align:right; white-space:nowrap; }
+.fl-amount{ font-size:16px; font-weight:800; color:#C2410C; font-variant-numeric:tabular-nums; }
+.fl-unit{ font-size:10px; color:var(--ink-3); }
+
+/* 拿不到实时报价时的说明块（不填假数字） */
+.flights-wait{ font-size:12px; color:var(--ink-3); padding:10px 2px; }
+.flights-na{
+  border:1px dashed var(--line); border-radius:var(--radius-sm);
+  padding:12px; background:var(--surface-2);
+}
+.flights-na-t{ font-size:13px; font-weight:700; }
+.flights-na-d{ font-size:12px; color:var(--ink-2); margin-top:4px; line-height:1.6; }
+
 /* ---------- 比价列表 ---------- */
 .rows{ display:flex; flex-direction:column; gap:8px; }
 .row{
