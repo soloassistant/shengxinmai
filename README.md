@@ -6,8 +6,14 @@
 
 ![界面截图](docs/screenshot.png)
 
-> 免费在线版（GitHub Pages）：https://soloassistant.github.io/shengxinmai/ （可装到桌面，像个 App 用）
-> 带服务端的版本：https://shengxinmai-compare.app.workbuddy.host/
+> **在线版（GitHub Pages）**：https://soloassistant.github.io/shengxinmai/ —— 纯前端，可装到桌面，像个 App 用。
+> 没有服务端，**不给价格对比卡**，只给各平台搜索入口（不放假价格）。
+>
+> **带服务端的版本**：https://shengxinmai-compare.app.workbuddy.host/ —— 有 `/api/compare`
+> 与价格采集，**填入联盟密钥后才会出真实比价**；未接密钥时同样退回「手动查」。
+>
+> 两个地址的**前端代码是同一份**（逐字节一致），差异只在有没有服务端。
+> 仓库地址：https://github.com/soloassistant/shengxinmai
 
 ---
 
