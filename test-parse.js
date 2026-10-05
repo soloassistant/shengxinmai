@@ -1158,6 +1158,36 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
      —— 这正是上一版假绿的成因，所以这里显式分两步。 */
   sandbox.fetch = async () => { throw new TypeError('测试：暂无服务端'); };
   await SXM.probeHealth();      // 收掉启动时那次
+
+  /* ==========================================================================
+     纯前端模式：任何人都不许被说成「配上就能用」（2026-10-06 定稿补丁 D 类）
+     --------------------------------------------------------------------------
+     ⚠ 这段**必须**留在这个位置，不能挪到文件末尾。
+     HEALTH_IDS 只有"从没探测成功过"时才是 null；下面 healthStub 一旦探成功，
+     它就再也不会变回 null —— 那个分支在文件末尾是**测不到的**。
+     所以本段紧贴上面那次失败的探测，专门打"纯前端"这一态。
+     ========================================================================== */
+  say('\n— 纯前端模式：不许承诺「配上就能用」 —');
+
+  /* 目录里声明 planned 的，无论探测结果如何都算"这版没实现"。
+     踩过的坑：这个判断原先排在探测结果**后面**，于是探测期间三个 planned
+     数据源被统一写成"需服务端才能接入"，把"这版永远不会有"说成了"还没配上密钥"。 */
+  const pfPlanned = SXM.adapterStatus(SXM.adapterEntry('ctrip'));
+  chk(pfPlanned.tag === '规划中',
+    '纯前端下 ctrip（目录声明 planned）仍然是「规划中」，实际 ' + pfPlanned.tag);
+
+  /* 没声明 planned 的，纯前端下答"不知道" —— 文案是"需服务端才能接入"。
+     原代码在这里 return true，抽屉会写「还没配密钥，配上就能用」，
+     可纯前端部署压根没有后端，配什么都不会生效。 */
+  const pfUndeclared = SXM.adapterStatus(SXM.adapterEntry('ignav'));
+  chk(pfUndeclared.tag === '未接入' && /纯前端模式/.test(pfUndeclared.text),
+    '纯前端下未声明的数据源说「需服务端才能接入（当前是纯前端模式）」，实际 ' + pfUndeclared.text);
+  /* 断言只打 adapterStatus 的返回值，**不去 grep 整张抽屉的 HTML**：
+     抽屉脚注里那句前瞻性承诺本身含"配上就能用"五个字，grep 全文必然误报 ——
+     上一轮就是这么误伤了一条真断言。 */
+  chk(!/配上就能用/.test(pfUndeclared.text),
+    '纯前端下这句话一个字都不出现 —— 配了也不会生效，说了就是让人白折腾');
+
   sandbox.fetch = healthStub;
   await SXM.probeHealth();      // 这一次才真的用上面的桩探到
 
@@ -1318,6 +1348,345 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   chk(offHosts.size === platforms.length,
     '离线清单给出的平台数与 SHOP_PLATFORMS 一致（' + offHosts.size + ' vs ' + platforms.length + '），不再只给第一个');
   chk(offHosts.size >= 3, '至少给了 3 个主要平台，实际 ' + offHosts.size);
+
+  /* ==========================================================================
+     2026-10-06：合并外部定稿补丁（26 处改动）后的行为守卫
+     --------------------------------------------------------------------------
+     为什么必须补这一段：补丁合并进来之后整套 536 条**全绿**，
+     但绿只证明"原来测过的东西没被改坏"，不证明"新改的东西是对的" ——
+     实际上那 536 条里**一条都没碰到**这 26 处改动。
+     所以下面每条都打在真函数上、读真返回值/真 HTML 输出，
+     不去 grep 源码字符串（那种断言改坏实现照样能过）。
+     按补丁自己的分类排版：A 安全 / B 脏数字 / C 崩溃路径 / D 诚实性 / E 无障碍。
+     ========================================================================== */
+
+  /* ---------- A 类：接口给的外链必须先判协议（esc 挡不住 javascript:） ---------- */
+  say('\n— A 类：不可信外链/图片不上屏 —');
+
+  const liveData = (items, extra) => Object.assign({
+    platforms: [{ id: 'jd', name: '京东', ok: true, count: items.length,
+                  lowest: { final: 179 }, items }],
+    unconfigured: [], disclaimer: '测试免责声明',
+  }, extra || {});
+
+  /* 这条是补丁里最"真"的一个安全缺陷：url 来自联盟接口回传，不是我们拼的。
+     esc() 只转义 HTML 字符，javascript:alert(1) 转义之后还是 javascript:alert(1)。 */
+  const xssCard = SXM.renderShopLive('耳机', liveData([
+    { title: '正常商品', final: 179, url: 'javascript:alert(1)' },
+  ]));
+  chk(!/href="javascript:/i.test(xssCard), 'it.url = javascript: 时不渲染可执行的 href');
+  chk(xssCard.indexOf('平台未给链接') !== -1, '判不过协议就不画「打开」，照实说「平台未给链接」');
+
+  /* 只挡小写无空格那一版等于没挡：浏览器认大小写，也认前后空格 */
+  const padCard = SXM.renderShopLive('耳机', liveData([
+    { title: 'X', final: 1, url: '  JAVASCRIPT:alert(1)  ' },
+  ]));
+  chk(!/href="/i.test(padCard), '带空格/大写的伪协议同样判不过（不是只挡小写那一版）');
+
+  /* 协议相对地址会被浏览器按"当前站点的 https"解析，属于同一类白名单外输入 */
+  const relCard = SXM.renderShopLive('耳机', liveData([
+    { title: 'X', final: 1, url: '//evil.example.com/x' },
+  ]));
+  chk(!/href="\/\//.test(relCard), '协议相对地址 //evil.com 也判不过（它不是 http/https）');
+
+  const noUrlCard = SXM.renderShopLive('耳机', liveData([{ title: 'X', final: 1 }]));
+  chk(noUrlCard.indexOf('href="undefined"') === -1 && noUrlCard.indexOf('平台未给链接') !== -1,
+    'url 缺字段时照实说「平台未给链接」，不印 href="undefined"');
+
+  /* 正面路径必须有：否则"一律不渲染链接"也能让上面四条全绿 */
+  const goodCard = SXM.renderShopLive('耳机', liveData([
+    { title: 'X', final: 1, url: 'https://item.jd.com/100012043978.html' },
+  ]));
+  chk(goodCard.indexOf('href="https://item.jd.com/100012043978.html"') !== -1,
+    '合法 https 链接照常渲染「打开」入口（正面路径，防止"一律不渲染"蒙混过关）');
+
+  const imgRel = SXM.renderShopLive('耳机', liveData([
+    { title: 'X', final: 1, url: 'https://a.example.com/1', image: '//evil.example.com/track.png' },
+  ]));
+  chk(imgRel.indexOf('<img') === -1, '协议相对的图片地址不渲染 <img>（否则请求打到别人的服务器）');
+  const imgJs = SXM.renderShopLive('耳机', liveData([
+    { title: 'X', final: 1, url: 'https://a.example.com/1', image: 'javascript:alert(1)' },
+  ]));
+  chk(imgJs.indexOf('<img') === -1, 'javascript: 的 image 字段不渲染 <img>');
+  const imgOk = SXM.renderShopLive('耳机', liveData([
+    { title: 'X', final: 1, url: 'https://a.example.com/1', image: 'https://img.example.com/a.png' },
+  ]));
+  chk(imgOk.indexOf('src="https://img.example.com/a.png"') !== -1, '合法图片地址照常渲染缩略图');
+  chk(imgOk.indexOf('referrerpolicy="no-referrer"') !== -1,
+    '外链缩略图带 referrerpolicy=no-referrer（不把来源泄露给第三方图床）');
+
+  /* 标题里的 HTML 必须被转义 —— 它是接口回传的字符串 */
+  const titleXss = SXM.renderShopLive('耳机', liveData([
+    { title: '<img src=x onerror=alert(1)>', final: 1, url: 'https://a.example.com/1' },
+  ]));
+  chk(titleXss.indexOf('<img src=x') === -1, '商品标题里的 HTML 被转义，不会变成真元素');
+
+  /* ---------- B 类：脏数字不许上屏（"NaN"看起来像个真数字） ---------- */
+  say('\n— B 类：脏数字 / 脏字段 —');
+
+  const dirty = SXM.renderFlightTable({ ok: true, count: 3, flights: [
+    { price: 500, carrier: 'Y', stopsText: '直飞', depTime: '08:00', arrTime: '10:00' },
+    { price: 'abc', carrier: '脏数据航空' },
+    { price: 300, carrier: 'Z', stopsText: '经停 1 次' },
+  ]});
+  const flRows = dirty.split('<div class="fl-row').slice(1);
+  const flAmounts = [...dirty.matchAll(/class="fl-amount">([^<]+)</g)].map((m) => m[1]);
+  chk(flRows.length === 3, '三条航班都渲染出来了，实际 ' + flRows.length);
+  chk(flAmounts.length === 3 && flAmounts[0] === '¥300' && flAmounts[1] === '¥500',
+    '价格从低到高排：300 在前、500 在后，实际 ' + JSON.stringify(flAmounts));
+  chk(flAmounts[2] === '¥—', '价格不可信的那条排在最后、价格位显示 —，实际 ' + flAmounts[2]);
+  chk(dirty.indexOf('NaN') === -1, '整张表不出现 NaN');
+  chk((dirty.match(/fl-tag">最便宜</g) || []).length === 1, '「最便宜」只出现一次（不是每行都标）');
+  chk(/fl-tag">最便宜/.test(flRows[0]) && flRows[0].indexOf('¥300') !== -1,
+    '「最便宜」落在真正最低价那一行（¥300），不是"谁排第一谁最便宜"');
+  chk(!/fl-tag">最便宜/.test(flRows[2]), '价格不可信的那条不参与「最便宜」评选');
+
+  const allDirty = SXM.renderFlightTable({ ok: true, count: 2, flights: [{ price: null }, { price: 'abc' }] });
+  chk(allDirty.indexOf('最便宜') === -1,
+    '全部价格都不可信时一条「最便宜」也不标 —— 宁可没有结论，也不给假结论');
+  chk(allDirty.indexOf('NaN') === -1 && (allDirty.match(/¥—/g) || []).length === 2,
+    '两条价格位都是 —，不是 NaN 也不是 0');
+
+  /* null / 空串：Number(null) 和 Number('') 都是 0，而 0 是有限值 ——
+     原来判据写着"非空 + 有限"两步，第二步拦不住它们，
+     于是"未知价格"变成 ¥0 并抢到第一行。0 比 NaN 危险得多：它看起来完全正常。
+     这是审查补丁时新打出来的缺陷（2026-10-06），不是补丁原本修的 "abc" 那一例。 */
+  const nullPrice = SXM.renderFlightTable({ ok: true, count: 2, flights: [{ price: null }, { price: 900 }] });
+  const nullAmts = [...nullPrice.matchAll(/class="fl-amount">([^<]+)</g)].map((m) => m[1]);
+  chk(nullPrice.indexOf('¥0') === -1,
+    'price: null 不会被当成 ¥0（Number(null) === 0），实际价格位 ' + JSON.stringify(nullAmts));
+  chk(nullAmts.join('|') === '¥900|¥—',
+    'price: null 排在最后且显示 —，实际 ' + JSON.stringify(nullAmts));
+  const nullRows = nullPrice.split('<div class="fl-row').slice(1);
+  chk(/fl-tag">最便宜/.test(nullRows[0]) && !/fl-tag">最便宜/.test(nullRows[1]),
+    '「最便宜」落在真有价格的那条（¥900）上，不落在 price: null 那条');
+
+  const blankPrice = SXM.renderFlightTable({ ok: true, count: 2, flights: [{ price: '   ' }, { price: 900 }] });
+  chk(blankPrice.indexOf('¥0') === -1, 'price: 空串/纯空格 同样不会被当成 ¥0');
+
+  const strPrice = SXM.renderFlightTable({ ok: true, count: 2, flights: [{ price: '500' }, { price: 300 }] });
+  chk(strPrice.indexOf('¥300') < strPrice.indexOf('¥500'),
+    '数字字符串（接口常见的 "300"）也能正确排序，不会被当成字符串比较');
+
+  /* 这两个字段原来没有兜底：缺字段时把字面量 undefined 印在航司名/meta 上。
+     stopsText 更隐蔽 —— esc(undefined) 得到字符串 "undefined"，是真值，
+     .filter(Boolean) 根本挡不住，会照样拼进 meta。 */
+  const noCarrier = SXM.renderFlightTable({ ok: true, count: 1, flights: [{ price: 100 }] });
+  chk(noCarrier.indexOf('fl-carrier">—') !== -1, 'carrier 缺字段时航司名显示 —，实际没显示');
+  chk(noCarrier.indexOf('undefined') === -1, '整行不出现 undefined');
+
+  const noStops = SXM.renderFlightTable({ ok: true, count: 1,
+    flights: [{ price: 100, carrier: 'Z', durationMin: 120 }] });
+  chk(noStops.indexOf('undefined') === -1,
+    'stopsText 缺字段时 meta 里不出现 undefined（esc(undefined) 是"undefined"这个真值，filter(Boolean) 拦不住）');
+  chk(noStops.indexOf('约 2小时') !== -1, '别的 meta 字段照常拼进来，不是把整段 meta 丢掉');
+
+  const dirtyShop = SXM.renderShopLive('耳机', liveData([
+    { title: 'X', final: 'abc', price: 'abc', url: 'https://a.example.com/1' },
+  ]));
+  chk(dirtyShop.indexOf('NaN') === -1, '比价卡拿到不可信价格时价格位不出现 NaN');
+  chk(dirtyShop.indexOf('￥undefined') === -1 && dirtyShop.indexOf('>undefined<') === -1,
+    '也不出现 undefined 价格');
+  /* it.title 缺字段 → 回落到商品名（原来直接印 undefined） */
+  const noTitle = SXM.renderShopLive('耳机', liveData([{ final: 1, url: 'https://a.example.com/1' }]));
+  chk(noTitle.indexOf('undefined') === -1, 'it.title 缺字段时回落到商品名，界面不出现 undefined');
+
+  /* 演示模式一律不给真图：数据是编的，配上真的商品照片＝让人当成比价结果 */
+  const demoImg = SXM.renderShopLive('耳机', liveData([
+    { title: 'X', final: 1, url: 'https://a.example.com/1', image: 'https://img.example.com/a.png' },
+  ], { demo: true }));
+  chk(demoImg.indexOf('<img') === -1, '演示卡里一个 <img> 都没有（不是"藏起来"，是根本没渲染）');
+  chk(demoImg.indexOf('img.example.com') === -1, '连第三方图片域名都不出现在演示卡里');
+  chk(demoImg.indexOf('row-img-ph') !== -1, '演示模式改用首字占位块，行高不塌');
+
+  /* ---------- C 类：脏输入走崩溃路径时对话不能断 ---------- */
+  say('\n— C 类：崩溃路径 —');
+
+  /* 半截 % 转义：decodeURIComponent 对残缺转义直接抛 URIError，
+     原来会把整条对话打断在这里（用户只看到"这一步没走通"）。
+     链接在 "%E4%B8%AD" 之后被截断 → 末尾剩下一个不完整的转义。 */
+  let truncParsed = null, truncThrew = null;
+  try { truncParsed = SXM.parseShareText('https://search.jd.com/Search?keyword=%E4%B8%AD%E6'); }
+  catch (e) { truncThrew = e; }
+  chk(truncThrew === null, '截断链接不会抛 URIError 打断对话，实际抛了 ' + (truncThrew && truncThrew.name));
+  chk(truncParsed && truncParsed.kind === 'truncated',
+    '识别为 truncated，实际 ' + JSON.stringify(truncParsed));
+
+  const truncCard = SXM.renderShareParsed({ kind: 'truncated', platform: 'jd' });
+  chk(typeof truncCard === 'string' && truncCard.indexOf('这条链接没复制完整') !== -1,
+    '截断链接给出一张说明卡，而不是静默失败');
+  chk(/截断/.test(truncCard) && /重新复制|商品名/.test(truncCard),
+    '卡片写清"复制时被截断"，并给出下一步（重新复制 / 直接发商品名）');
+
+  /* 完整链接照常解出关键词 —— 别为了防截断把功能一起关掉 */
+  const fullKw = SXM.parseShareText(
+    'https://search.jd.com/Search?keyword=%E6%89%AB%E5%9C%B0%E6%9C%BA%E5%99%A8%E4%BA%BA&enc=utf-8');
+  chk(fullKw && fullKw.kind === 'keyword' && fullKw.keyword === '扫地机器人',
+    '完整编码的链接照常解出关键词，实际 ' + JSON.stringify(fullKw));
+  chk(SXM.renderShareParsed({ kind: 'keyword', keyword: 'x' }) === null,
+    '能比价的关键词仍然直接返回 null（走正常比价，不弹说明卡）');
+  chk(SXM.decodeWatchCode('SXM1.%E4%B8') === null,
+    '同步码里带半个 % 转义时返回 null 而不是抛（解不开就明确说解不开）');
+
+  /* 隐私模式 / 关掉网站数据时 localStorage 读写都直接抛 SecurityError */
+  say('\n— C 类：隐私模式下 localStorage 抛 SecurityError —');
+  const realLS = sandbox.localStorage;
+  const boom = () => { const e = new Error('SecurityError'); e.name = 'SecurityError'; throw e; };
+  sandbox.localStorage = { getItem: boom, setItem: boom, removeItem: boom };
+  let lsThrew = null, imported = null, countAfter = null;
+  try {
+    imported = SXM.watchImport('SXM1.' + encodeURIComponent(JSON.stringify([
+      { q: '猫粮', platform: 'jd', sku: '1', title: '猫粮', price: 88, ts: 1700000000000 },
+    ])));
+    /* 这一次读也要在 try 里：撤掉兜底时它会抛，抛出去会把整套测试打断，
+       那比"一条断言红"更糟 —— 崩溃会掩盖掉后面所有的结果。 */
+    countAfter = SXM.watchCount;
+  } catch (e) { lsThrew = e; }
+  chk(lsThrew === null, 'localStorage 读写都抛异常时导入关注不崩，实际抛了 ' + (lsThrew && lsThrew.name));
+  chk(imported === 1, '导入仍然完成解析（返回导入条数 1），实际 ' + imported);
+  chk(countAfter === 0, '存不进去就如实为空，不假装存上了（读回来还是 0 条），实际 ' + countAfter);
+  sandbox.localStorage = realLS;
+
+  /* 兜底的透明 textarea 必须被收走：execCommand 抛异常时若不收，
+     它会永久留在页面上，看不见却照样吃掉那个位置的点击。 */
+  say('\n— C 类：复制兜底的 textarea 必须被收走 —');
+  const realCreate = sandbox.document.createElement;
+  const realAppend = BODY_EL.appendChild;
+  let taMade = 0, taRemoved = 0, lastToast = '';
+  sandbox.document.createElement = (t) => {
+    const el = realCreate(t);
+    if (String(t).toLowerCase() === 'textarea') {
+      taMade++;
+      el.select = () => {};
+      el.remove = () => { taRemoved++; };
+    }
+    return el;
+  };
+  BODY_EL.appendChild = (el) => { if (el && el.className === 'toast') lastToast = el.textContent; };
+  sandbox.document.execCommand = () => { throw new Error('execCommand 不可用'); };
+  await SXM.copyText('省心买测试');
+  chk(taMade === 1 && taRemoved === 1,
+    'execCommand 抛异常时兜底 textarea 也被摘掉（finally），实际 建 ' + taMade + ' / 摘 ' + taRemoved);
+  chk(/复制失败/.test(lastToast), '复制失败给了明确提示（长按手动复制），不是静默，实际 ' + lastToast);
+  sandbox.document.createElement = realCreate;
+  BODY_EL.appendChild = realAppend;
+
+  /* ---------- D 类：不给不存在的数字/入口 ---------- */
+  say('\n— D 类：诚实性 —');
+
+  const basketBase = {
+    itemCount: 1, pricedCount: 1, unpriced: [], notes: [], failed: [],
+    items: [{ q: '猫粮', best: { platform: 'jd', name: '京东', final: 70 },
+              alternatives: [], spread: 0, platformCount: 1 }],
+  };
+  /* 推荐「一家买齐」时上游可能根本不回 split。旧代码用 money(0) 顶上，
+     卡上就凭空出现一行「分件买最优 ¥0」—— 那是编出来的数字。
+     渲染包在 try 里：旧代码在这条输入上会直接抛（读 data.split.platforms），
+     抛出去会打断整套测试；崩掉比红一条更糟。 */
+  let noSplit = '';
+  try {
+    noSplit = SXM.renderBasket(Object.assign({}, basketBase, {
+      recommend: 'single', reason: '一家买齐更省事',
+      singles: [{ name: '京东', total: 70, count: 1 }],
+    }));
+  } catch (e) { noSplit = '<<渲染直接抛了：' + (e && e.message) + '>>'; }
+  /* ⚠ 必须**同时**断言"卡片真的渲染出来了"。
+     只写 indexOf('分件买最优') === -1 是一条会假绿的断言：渲染整个抛掉、
+     返回空串或占位串时它也满足 —— 变异实验当场抓出来的（把这一行改坏后
+     这条断言照样绿，红的是下面那条计数）。"靠某段文字不存在来通过"是假的守卫。 */
+  chk(noSplit.indexOf('省钱清单怎么买') !== -1,
+    '没算出分件方案时卡片本身仍然正常渲染（不是靠"没渲染"来通过断言），实际 ' + noSplit.slice(0, 60));
+  chk(noSplit.indexOf('分件买最优') === -1,
+    '没算出分件方案时，「分件买最优」整行不画，实际 ' + noSplit.slice(0, 120));
+  chk((noSplit.match(/class="plan-row/g) || []).length === 1,
+    '只留下"一家买齐"那一行，实际 ' + (noSplit.match(/class="plan-row/g) || []).length + ' 行');
+  chk(noSplit.indexOf('plan-total">¥</span>0') === -1, '卡片上不会凭空出现一个「¥0」总价');
+
+  const withSplit = SXM.renderBasket(Object.assign({}, basketBase, {
+    recommend: 'split', reason: '分件买能省 ¥30',
+    singles: [{ name: '京东', total: 100, count: 1 }],
+    split: { total: 70, platformCount: 1, platforms: [{ platform: 'jd', name: '京东', subtotal: 70, count: 1 }] },
+  }));
+  chk(withSplit.indexOf('分件买最优') !== -1, '真算出分件方案时这一行照常画（正面路径）');
+
+  /* planned 优先于探测结果：目录已经声明「这版没实现」，
+     就不该因为服务端把它列进 adapters 就改口。 */
+  const prioFetch = async (url) => {
+    const u = String(url);
+    if (u.indexOf('/api/health') !== -1) {
+      return { ok: true, json: async () => ({ ok: true, adapters: [
+        { id: 'ctrip', configured: false },   // 目录声明 planned，服务端却也列了它
+        { id: 'ignav', configured: false },   // 服务端确实实现、只是没配 key
+      ] }) };
+    }
+    if (u.indexOf('/api/metrics') !== -1) {
+      return { ok: true, json: async () => ({ ok: true, requests: 0, platforms: [] }) };
+    }
+    return { ok: false, status: 404, json: async () => null };
+  };
+  sandbox.fetch = prioFetch;
+  await SXM.probeHealth();
+
+  chk(SXM.sourceImplemented(SXM.adapterEntry('ctrip')) === false,
+    '目录声明 planned 的数据源，即使被服务端列进 adapters 也仍然是 false（目录声明优先）');
+  chk(SXM.adapterStatus(SXM.adapterEntry('ctrip')).tag === '规划中',
+    'ctrip 不会被说成「配上就能用」，实际 ' + SXM.adapterStatus(SXM.adapterEntry('ctrip')).tag);
+  const ignavSt = SXM.adapterStatus(SXM.adapterEntry('ignav'));
+  chk(ignavSt.tag === '未接入' && /配上就能用/.test(ignavSt.text),
+    'ignav（服务端确实实现了、只是没配 key）才说「配上就能用」—— 这句只在真成立时才出现，实际 ' + ignavSt.text);
+
+  /* 平台展示名：ADAPTER_REGISTRY 里 dataoke 叫「大淘客」（那是我们对接的中间服务），
+     但用户看到的是淘宝/天猫的价。直接印「大淘客」等于让用户以为多了个陌生平台。
+     platLabel 不外泄，只能从**渲染出来的抽屉**上验 —— 所以这条必须走渲染路径。 */
+  const wImported = SXM.watchImport('SXM1.' + encodeURIComponent(JSON.stringify([
+    { q: '猫粮', platform: 'dataoke', sku: '9', title: '猫粮', price: 88, ts: 1700000000000 },
+  ])));
+  SXM.openDrawer();
+  const watchRowHtml = sandbox.document.getElementById('drawer-body').innerHTML;
+  chk(wImported === 1 && watchRowHtml.indexOf('淘宝 / 天猫 · 关注时最低') !== -1,
+    '关注列表里 dataoke 的平台名显示为「淘宝 / 天猫」，不是内部的「大淘客」（导入 ' + wImported + ' 条）');
+  SXM.closeDrawer();
+
+  /* ---------- E 类：抽屉的 inert 与互锁 ---------- */
+  say('\n— E 类：抽屉 inert 与互锁 —');
+
+  const eApp = elFor('.app'), eDrawer = elFor('#drawer'), eBasket = elFor('#basket');
+
+  /* 关着的抽屉只是 translateX(102%) 移出屏幕，元素还在无障碍树里、还能 Tab 到
+     （里面就有「关闭」按钮和输入框）—— 键盘用户会 Tab 进一个看不见的面板。 */
+  SXM.closeDrawer(); SXM.closeBasket();
+  chk(eDrawer.inert === true, '抽屉关着的时候自己就是 inert 的');
+  chk(eBasket.inert === true, '省钱清单关着时同样 inert');
+  chk(eApp.inert === false, '两个都关着时主内容不被锁');
+
+  SXM.openDrawer();
+  chk(eDrawer.inert === false && eBasket.inert === true,
+    '打开抽屉时：自己不锁、清单那一侧锁上（两个抽屉互相锁）');
+  chk(eApp.inert === true, '打开抽屉时主内容被锁');
+
+  SXM.openBasket();
+  chk(eBasket.inert === false && eDrawer.inert === true, '换开清单时互锁方向反过来');
+  chk(eApp.inert === true, '换开清单时主内容仍然锁着（不会出现两边都不锁的空窗）');
+
+  SXM.closeBasket();
+  chk(eBasket.inert === true && eDrawer.inert === true && eApp.inert === false,
+    '全部关闭后两个抽屉都锁上、主内容解冻');
+
+  /* ⚠ 下面这条读的是**静态 HTML**，不是行为断言 ——
+     role/aria-modal 是写在 index.html 的 <aside> 上的，JS 侧没有可驱动的入口。
+     老实标出来，不混进上面那批行为断言里充数。 */
+  const htmlSrc = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const asideTags = htmlSrc.match(/<aside class="drawer"[^>]*>/g) || [];
+  chk(asideTags.length === 2 && asideTags.every((t) => /role="dialog"/.test(t) && /aria-modal="true"/.test(t)),
+    '（静态结构）两个抽屉都补了 role="dialog" aria-modal="true"，实际 ' + asideTags.length + ' 个');
+  chk(asideTags.length === 2 && asideTags.every((t) => /aria-label="[^"]+"/.test(t)),
+    '（静态结构）每个抽屉都有 aria-label，否则读屏只会念"对话框"');
+
+  /* 缩略图那一列是新加的 class：样式表里没有它，行高会塌、图会撑破卡片。
+     JS 里引用的 class 有没有被定义，只能这样跨文件查 —— 老实标成静态结构断言。 */
+  const cssSrc = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
+  chk(/\.row-img\s*\{/.test(cssSrc), '（静态结构）.row-img 在样式表里有定义（缩略图那一列）');
+  chk(/\.row-img-ph\s*\{/.test(cssSrc), '（静态结构）.row-img-ph 首字占位块也有定义');
 
   say(`\n结果：${pass} 通过 / ${fail} 失败`);
   flush();

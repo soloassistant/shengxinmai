@@ -140,6 +140,10 @@ const FLIGHT_PLATFORMS = [
   {
     id:'fliggy', abbr:'飞', cls:'pf-fliggy', name:'飞猪',
     tag:'阿里系',
+    /* 飞猪没有可用的 Web 深链：机票主阵地在 App 内，网页端只给得到首页。
+       2026-10-05 复核确认，其余两个入口都带 {dep}/{arr}/{date}，只有这条是裸的。
+       塞一个点进去还得把出发地/目的地/日期全重填一遍，不如明说。 */
+    desc:'App 内搜索更全，网页端需手动填行程',
     url:'https://www.fliggy.com/'
   }
 ];

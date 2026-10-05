@@ -20,6 +20,24 @@
   const enc = encodeURIComponent;
   const WEEK_CN = ['日', '一', '二', '三', '四', '五', '六'];
 
+  /* 外链图片地址只认 http/https。
+     这个值来自第三方联盟接口，不是我们自己生成的：只做 HTML 转义不够，
+     javascript: 伪协议转义之后照样能被浏览器执行，拿到手必须先判协议。 */
+  const safeImg = (u) => {
+    const s = String(u == null ? '' : u).trim();
+    return /^https?:\/\//i.test(s) ? s : '';
+  };
+
+  /* 跳转链接同样只认 http/https，理由和 safeImg 完全一样：
+     商品链接（it.url / pq.best.url）是联盟接口回传的，不是我们自己拼的。
+     esc() 只管 HTML 字符，javascript:alert(1) 转义之后还是 javascript:alert(1)，
+     用户点一下「打开」就执行了 —— 这是从第三方数据进来的 XSS，必须单独判协议。
+     判不过就不给链接：宁可少一个入口，也不给一个点了会出事的东西。 */
+  const safeUrl = (u) => {
+    const s = String(u == null ? '' : u).trim();
+    return /^https?:\/\//i.test(s) ? s : '';
+  };
+
   /* 演示模式开关：默认关闭。开着时会显示一串样例价格，
      卡片上必须同时打出「演示数据 · 非实时」，不允许静默伪装成真实报价。 */
   let DEMO_MODE = false;
@@ -219,7 +237,11 @@
     }
 
     if (to && !from) {
-      const last = localStorage.getItem('sxm.lastFrom');
+      /* 隐私模式 / 关掉网站数据时 localStorage.getItem 会直接抛 SecurityError。
+         抛出去整条解析就断了，用户看到的是一句"这一步没走通"，
+         而这里只是猜一个**可选**的出发地 —— 猜不到就算了，让用户自己补。 */
+      let last = null;
+      try { last = localStorage.getItem('sxm.lastFrom'); } catch { last = null; }
       if (last && last !== to) { from = last; guessed = true; }
     }
     return { from, to, guessed };
@@ -586,9 +608,31 @@
   /* ======================================================================
      4.5 渲染：实时比价（有服务端数据时走这条）
      ====================================================================== */
+  /**
+   * 价格字段到底能不能用？**判据只许有一份。**
+   *
+   * 踩过的坑（2026-10-06 合并定稿补丁后验证时打出来的真缺陷）：
+   * 航班表那边图省事写了裸 Number(price)，而 Number(null) === 0、Number('') === 0
+   * —— 都是有限值，于是"未知价格"被当成 0 元，抢到第一行还标上「最便宜」。
+   * 这正是下面 fmtPrice 的注释要防的那件事，却因为同一个判据写了两份而漏在另一边。
+   * 所以抽出来共用：谁都不许自己再写一遍。
+   *
+   * 为什么 null 和空串必须单独挡：Number() 会把它们**悄悄**变成 0。
+   * 0 是最危险的那种假数字 —— 它看起来完全正常，不会像 NaN 那样引人怀疑。
+   */
+  const numOrNull = (n) => {
+    if (n == null || (typeof n === 'string' && !n.trim())) return null;
+    const v = Number(n);
+    return isFinite(v) ? v : null;
+  };
+
   function fmtPrice(n) {
-    if (n == null) return '—';
-    return Number.isInteger(n) ? String(n) : Number(n).toFixed(2);
+    /* 空值和不可信数字都显示「—」，绝不把 NaN 印到价格位上。
+       接口偶尔会回非数字（字段名改了、脏数据），而 "NaN" 看起来像一个真数字，
+       比价的全部价值就建立在这个数字可信上 —— 拿不到就该说拿不到。 */
+    const v = numOrNull(n);
+    if (v === null) return '—';
+    return Number.isInteger(v) ? String(v) : v.toFixed(2);
   }
 
   const money = (n) => '<span class="cny">¥</span>' + fmtPrice(n);
@@ -685,10 +729,27 @@
           data-title="${esc((p.lowest && p.lowest.title) || '')}"
           data-price="${esc(String(p.lowest.final))}">关注降价</button>` : '';
 
-      const rows = p.items.map((it, i) => `
-        <div class="row row-noicon ${i === 0 ? 'row-cheapest' : ''}">
+      /* 缩略图占掉原本平台图标那一列：平台名已经写在上面的 .live-plat 里，
+         行内不必再放一遍平台图标。有图走默认三列，没图才收成两列。 */
+      const rows = p.items.map((it, i) => {
+        const src = safeImg(it.image);
+        /* 链接是接口给的，必须先过 safeUrl。判不过就不画「打开」——
+           放一个点下去会执行脚本的入口，比没有入口危险得多。 */
+        const goUrl = safeUrl(it.url);
+        /* 演示模式一律不给真图：数据是编的，配上真的商品照片，
+           等于让用户以为那就是比价结果。改用首字占位块 —— 零请求、零误导。 */
+        const thumb = data.demo
+          ? `<div class="row-img row-img-ph" aria-hidden="true">${esc(
+              String(it.title || product).trim().slice(0, 1))}</div>`
+          : (src
+              ? `<img class="row-img" src="${esc(src)}" alt="" loading="lazy"
+                     referrerpolicy="no-referrer">`
+              : '');
+        return `
+        <div class="row ${thumb ? '' : 'row-noicon'} ${i === 0 ? 'row-cheapest' : ''}">
+          ${thumb}
           <div class="row-main">
-            <div class="row-name">${esc(it.title)}</div>
+            <div class="row-name">${esc(it.title || product)}</div>
             <div class="row-desc">${
               [it.shop ? esc(it.shop) : '',
                it.sales ? '月销 ' + it.sales : '',
@@ -703,10 +764,14 @@
               // 演示数据的链接是占位符。做成能点的按钮等于给用户一个假入口，
               // 点了什么都不会发生 —— 那比不放按钮更让人恼火。
               ? '<div class="price-na" style="margin-top:5px">样例</div>'
-              : `<a class="go ${i === 0 ? 'go-brand' : ''}" href="${esc(it.url)}"
-                    target="_blank" rel="noopener noreferrer">打开</a>`}
+              : (goUrl
+                  ? `<a class="go ${i === 0 ? 'go-brand' : ''}" href="${esc(goUrl)}"
+                       target="_blank" rel="noopener noreferrer">打开</a>`
+                  // 真实数据但链接没通过协议校验：照实说，别假装有入口
+                  : '<div class="price-na" style="margin-top:5px">平台未给链接</div>')}
           </div>
-        </div>`).join('');
+        </div>`;
+      }).join('');
 
       const more = p.count > p.items.length ? `，共 ${p.count} 条` : '';
       return `
@@ -781,16 +846,22 @@
        用户应该能自己复核我的建议 —— 只给结论的推荐叫命令。 */
     const planRows = [];
     if (!isNone) {
-      const who = ((data.split && data.split.platforms) || [])
-        .map((p) => esc(p.name) + ' ¥' + fmtPrice(p.subtotal)).join('　');
-      planRows.push(`
-        <div class="plan-row ${isSplit ? 'pick' : ''}">
-          <div>
-            <div class="plan-name">分件买最优${isSplit ? ' <span class="badge badge-best">建议</span>' : ''}</div>
-            <div class="plan-meta">${(data.split && data.split.platformCount) || 0} 个平台：${who || '—'}</div>
-          </div>
-          <div class="plan-total">${money(data.split ? data.split.total : 0)}</div>
-        </div>`);
+      /* 「分件买最优」这一行只有在真算出分件方案时才画。
+         踩过的坑：推荐结论是「一家买齐」时 data.split 可能是空的，
+         旧代码用 money(0) 顶上，卡上就凭空出现一行「分件买最优 ¥0」——
+         那是编出来的数字。整行不画比画一个假 0 诚实。 */
+      if (data.split) {
+        const who = (data.split.platforms || [])
+          .map((p) => esc(p.name) + ' ¥' + fmtPrice(p.subtotal)).join('　');
+        planRows.push(`
+          <div class="plan-row ${isSplit ? 'pick' : ''}">
+            <div>
+              <div class="plan-name">分件买最优${isSplit ? ' <span class="badge badge-best">建议</span>' : ''}</div>
+              <div class="plan-meta">${data.split.platformCount || 0} 个平台：${who || '—'}</div>
+            </div>
+            <div class="plan-total">${money(data.split.total)}</div>
+          </div>`);
+      }
 
       (data.singles || []).slice(0, 2).forEach((s, i) => {
         const pick = !isSplit && i === 0;
@@ -826,9 +897,10 @@
         ? '（次低是 ' + esc(it.runnerUp.name) + ' ¥' + fmtPrice(it.runnerUp.final)
           + (it.gapToRunnerUp > 0 ? '，贵 ¥' + fmtPrice(it.gapToRunnerUp) : '，同价') + '）'
         : '';
-      // 演示数据的链接是占位符，不能做成能点的假按钮
-      const go = pq.best && pq.best.url && pq.best.url !== '#demo'
-        ? `<a class="go go-brand" href="${esc(pq.best.url)}" target="_blank" rel="noopener noreferrer">打开</a>`
+      // 演示数据的链接是占位符，不能做成能点的假按钮；真实链接也要过协议校验
+      const goUrl = safeUrl(pq.best && pq.best.url);
+      const go = pq.best && goUrl
+        ? `<a class="go go-brand" href="${esc(goUrl)}" target="_blank" rel="noopener noreferrer">打开</a>`
         : '';
       return `<div class="basket-item">
         <div>
@@ -1196,7 +1268,8 @@
         </div>`;
     }
 
-    localStorage.setItem('sxm.lastFrom', from);
+    // 存不下来只是"下次不记得从哪出发"，不能因此让整张出行卡渲染失败
+    try { localStorage.setItem('sxm.lastFrom', from); } catch { /* 私密模式存不了就算了 */ }
     return head + modeBlock + railBlock + airBlock;
   }
 
@@ -1435,7 +1508,16 @@
 
     // 京东搜索链接：search.jd.com/Search?keyword=xxx
     m = t.match(/search\.jd\.com\/[^?]*\?[^#]*keyword=([^&#]+)/i);
-    if (m) return { kind: 'keyword', keyword: decodeURIComponent(m[1].replace(/\+/g, ' ')), platform: 'jd' };
+    if (m) {
+      /* 链接被截断时关键词可能正好停在「%」上（…keyword=%E4%B8%AD），
+         decodeURIComponent 对残缺转义直接抛 URIError，会把整条对话打断在
+         这里（用户只看到"这一步没走通"）。解不开就如实说链接不完整，
+         绝不把半截乱码当商品名去问平台。 */
+      let kw = '';
+      try { kw = decodeURIComponent(m[1].replace(/\+/g, ' ')); } catch { kw = ''; }
+      if (kw) return { kind: 'keyword', keyword: kw, platform: 'jd' };
+      return { kind: 'truncated', platform: 'jd' };
+    }
 
     // 拼多多商品：mobile.yangkeduo.com/goods.html?goods_id=xxx
     m = t.match(/yangkeduo\.com\/goods\d*\.html[^#]*[?&]goods_id=(\d+)/i);
@@ -1481,6 +1563,12 @@
           <div class="bi-right"><a class="go go-brand" href="${esc(url)}"
             target="_blank" rel="noopener noreferrer">打开</a></div>
         </div></div>`;
+    } else if (p.kind === 'truncated') {
+      title = '这条链接没复制完整';
+      body = `
+        <div class="banner banner-warn"><span class="banner-ico">!</span>
+          <span>链接里的中文编码在<strong>复制时被截断</strong>了（末尾剩一个不完整的 % 转义），
+          我解不出商品名，也不会拿半截乱码去问平台。整段重新复制一次，或直接把商品名发我。</span></div>`;
     } else if (p.kind === 'tpwd') {
       title = '识别到淘口令';
       body = `
@@ -1710,9 +1798,12 @@
       }
     } catch { ok = false; }
     if (!ok) {
-      /* file:// 或旧 WebView：execCommand 兜底。再不行就明说，让用户长按复制。 */
+      /* file:// 或旧 WebView：execCommand 兜底。再不行就明说，让用户长按复制。
+         remove() 必须放 finally：execCommand 抛异常时若不收，
+         这个 position:fixed 的透明 textarea 会永久留在页脚上方，
+         看不见但照样吃掉那个位置的点击。 */
+      const ta = document.createElement('textarea');
       try {
-        const ta = document.createElement('textarea');
         ta.value = text;
         ta.setAttribute('readonly', '');
         ta.style.position = 'fixed';
@@ -1720,8 +1811,8 @@
         document.body.appendChild(ta);
         ta.select();
         ok = document.execCommand('copy');
-        if (ta.remove) ta.remove();
       } catch { ok = false; }
+      finally { if (ta.remove) ta.remove(); }
     }
     showToast(ok ? '已复制' : '复制失败，长按文字手动复制');
   }
@@ -1849,8 +1940,19 @@
    * 返回 true / false / null（null = 现在还判断不了）。
    */
   function sourceImplemented(a) {
+    /* planned 要排在探测结果前面：目录已经声明「这版没有实现」，
+       就不该因为 /api/health 还没回来就改口说「当前是纯前端模式」。
+       踩过的坑：探测期间这里返回 null，adapterStatus 会把**所有**数据源
+       （包括 planned 的那三个）统一写成"需服务端才能接入（当前是纯前端模式）"，
+       等于把"这版永远不会有"说成了"只是还没配上密钥"。 */
+    if (a.planned) return false;
     if (HEALTH_IDS) return HEALTH_IDS.has(a.id);
-    if (SERVER_OK === false) return !a.planned;
+    /* 这里刻意不区分「探测失败」和「还在探测」：两种情况都答不出来，
+       而 adapterStatus 对 null 的文案是「需服务端才能接入（当前是纯前端模式）」——
+       对纯前端部署这句才是真的（这个站的 keys 在服务端，前端无论如何都配不了）。
+       原来这里 return true，抽屉会写「还没配密钥，配上就能用」：
+       可那个站根本没有后端，配什么都不会生效，等于骗用户白折腾一圈。
+       顺带也覆盖了探测中的那 4 秒窗口，代价只是文案不够精确。 */
     return null;
   }
 
@@ -1936,6 +2038,12 @@
     return h ? h + '小时' + (r ? r + '分' : '') : r + '分';
   }
 
+  /** 排序用的价格：可信就用它，不可信就顶到无穷大（永远排最后，且不参与「最便宜」） */
+  function rankPrice(f) {
+    const v = numOrNull(f && f.price);
+    return v === null ? Infinity : v;
+  }
+
   /**
    * 航班表：**按价格从低到高排好**，一行一个航班，价格直接写在行里。
    * 用户要的就是这个 —— 不用一个一个点开看价。
@@ -1947,17 +2055,26 @@
        而「自动排好序」正是这个功能对用户的全部承诺。排序成本近乎零，两处都排。 */
     const list = (data.flights || [])
       .slice()
-      .sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0))
+      /* 价格不可信（缺字段 / 非数字）的航班一律排到最后。
+         原来用 `|| 0` 兜底，等于把它当成 0 元，它就可能抢到第一行 ——
+         而第一行是这张表唯一给出结论的地方（标着「最便宜」）。 */
+      .sort((a, b) => rankPrice(a) - rankPrice(b))
       .slice(0, 12);
     const cheapest = list[0] ? list[0].price : null;
 
     const rows = list.map((f, i) => {
-      const isBest = i === 0;
+      /* 价格位和排序必须用**同一个**判据（numOrNull），否则会出现
+         "排最后但显示 ¥0" 或"显示 — 却标着最便宜"这种自相矛盾的表。 */
+      const priceVal = numOrNull(f.price);
+      /* 「最便宜」是这张表**唯一给出的结论**，只能落在真有价格的那一行上。
+         光按行号算（i === 0）不够：整张表一个可用价格都没有时，
+         排第一的会是一个显示「—」的航班 —— 那就是在给一个不存在的结论盖章。 */
+      const isBest = i === 0 && priceVal !== null;
       const bags = f.bags
         ? '行李 ' + (f.bags.carry_on || 0) + ' 手提' + (f.bags.checked ? ' + ' + f.bags.checked + ' 托运' : '')
         : '';
       const meta = [
-        esc(f.stopsText),
+        esc(f.stopsText || ''),
         humanMin2(f.durationMin) ? '约 ' + humanMin2(f.durationMin) : '',
         bags,
         f.selfTransfer ? '需自行转机' : ''
@@ -1978,11 +2095,12 @@
             <div class="fl-port">${esc(f.arrAirport || '')}</div>
           </div>
           <div class="fl-main">
-            <div class="fl-carrier">${esc(f.carrier)}${f.flightNo ? ' ' + esc(f.flightNo) : ''}</div>
+            <div class="fl-carrier">${esc(f.carrier || '—')}${f.flightNo ? ' ' + esc(f.flightNo) : ''}</div>
             ${isBest ? '<div class="fl-tag">最便宜</div>' : ''}
           </div>
           <div class="fl-price">
-            <div class="fl-amount">${esc(f.symbol || '¥')}${Math.round(f.price)}</div>
+            <div class="fl-amount">${esc(f.symbol || '¥')}${
+            priceVal === null ? '—' : Math.round(priceVal)}</div>
             <div class="fl-unit">起</div>
           </div>
         </div>`;
@@ -2278,9 +2396,15 @@
 
   /** 只要有抽屉开着，就锁住主内容。两个抽屉共用一个入口，避免各自漏判 */
   function syncInert() {
-    const anyOpen = (drawer && drawer.classList.contains('open'))
-                 || (basketEl && basketEl.classList.contains('open'));
-    if (appRoot) appRoot.inert = !!anyOpen;
+    const dOpen = !!(drawer && drawer.classList.contains('open'));
+    const bOpen = !!(basketEl && basketEl.classList.contains('open'));
+    if (appRoot) appRoot.inert = dOpen || bOpen;
+    /* 抽屉之间也要互锁，而且**关着的时候就得锁**：
+       .drawer 关着只是 translateX(102%) 移出屏幕外，元素还在无障碍树里、
+       还能 Tab 到（里面就有「关闭」按钮和输入框）—— 键盘用户会 Tab 进
+       一个自己看不见的面板。原来只锁了 .app，抽屉之间和关闭状态全漏了。 */
+    if (drawer) drawer.inert = !dOpen;
+    if (basketEl) basketEl.inert = !bOpen;
   }
 
   /** 打开抽屉的统一处理：记住来源焦点 → 锁住主内容 → 把焦点移进抽屉 */
@@ -2428,13 +2552,20 @@
         <div class="fine" style="margin-top:9px">「自动」跟随系统。首帧就已经是正确颜色，不会白屏闪一下。</div>
       </div>`;
 
+    // 抽屉是低频面板，测试桩 / 精简页面里可能根本没有这个节点。
+    // 少画一块面板不影响主流程，为此抛异常会把整个脚本（含 SXM 接口）一起带走。
+    // 合并说明：这一条来自外部补丁（E3），与本地 aa16f52 加的 buildBlock 是
+    // 同一位置的两处新增，已两边都留 —— 先做 null 兜底，再声明版本块。
+    const drawerBody = $('#drawer-body');
+    if (!drawerBody) return;
+
     /* 版本标识放最底下、最小号：它是给"排查线上是哪一版"用的，不是给日常用户看的。
        只有真问到服务端才显示 —— 纯前端模式下没有构建标识可报，就不摆一行占位。 */
     const buildBlock = BUILD
       ? `<div class="fine mono" style="margin-top:14px">服务端 ${esc(BUILD.version || '—')}　构建 ${esc(BUILD.buildId || '—')}</div>`
       : '';
 
-    $('#drawer-body').innerHTML = `
+    drawerBody.innerHTML = `
       <div class="banner banner-${live ? 'info' : 'warn'}">
         <span class="banner-ico">${live ? 'i' : '!'}</span>
         <span style="display:block">
@@ -2471,7 +2602,13 @@
     } catch { /* 指标拿不到不影响主功能，静默 */ }
   }
 
+  /* 接入源的名字不等于购物平台的名字：dataoke 是「大淘客」这个 API 服务商，
+     用户认的是淘宝 / 天猫。降价关注里显示"大淘客开放平台"等于让他看不懂
+     自己关注了哪个平台。所以先把接入源 id 翻译成人话，再退回原来的查表。 */
+  const PLAT_LABEL = { dataoke: '淘宝 / 天猫' };
+
   function platLabel(id) {
+    if (PLAT_LABEL[id]) return PLAT_LABEL[id];
     const t = ADAPTER_REGISTRY.find((x) => x.id === id);
     return t ? t.name : (SHOP_PLATFORMS.find((x) => x.id === id) || {}).name || id;
   }
@@ -2510,7 +2647,9 @@
   });
 
   function refreshDot() {
-    $('#status-dot').className = 'dot' + (ADAPTER_REGISTRY.some((a) => a.live) ? ' live' : '');
+    const dot = $('#status-dot');
+    if (!dot) return;
+    dot.className = 'dot' + (ADAPTER_REGISTRY.some((a) => a.live) ? ' live' : '');
   }
 
   /* ======================================================================
@@ -2625,6 +2764,7 @@
   renderDrawer();
   renderRecent();
   applyLimits();      // 先按兜底值渲染一次，探测回来后再按服务端的真实值覆盖
+  syncInert();        // 两个抽屉初始都是关的，先锁掉，免得 Tab 能走进屏外的面板（E2）
   probeHealth();
 
   /* 断网重连后自动重探：从"没有服务端"恢复过来的一条真实路径（另一条是开抽屉时重探） */
