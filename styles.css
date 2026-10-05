@@ -707,6 +707,12 @@ p{ margin:0; }
 .bi-sub{ font-size:11.5px; color:var(--ink-3); margin-top:2px; line-height:1.55; }
 .bi-right{ text-align:right; }
 .bi-price{ font-size:15px; font-weight:700; font-variant-numeric:tabular-nums; }
+/* 离线清单的多平台入口：跨满两列、放不下就换行。
+   给和比价卡一样多的一组入口，降级不该在能力上缩水。 */
+.bi-links{
+  grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:6px;
+}
+.bi-links .go{ margin-top:0; }
 
 /* ---------- 无障碍与动效偏好 ---------- */
 .sr-only{

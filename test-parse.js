@@ -1140,9 +1140,9 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
     ],
     limits: { basketThreshold: 10, basketMaxItems: 8 },
   };
-  sandbox.fetch = async (url) => {
+  const healthStub = async (url) => {
     const u = String(url);
-    if (u.indexOf('/api/health') === 0 || u.indexOf('/api/health') !== -1) {
+    if (u.indexOf('/api/health') !== -1) {
       return { ok: true, json: async () => HEALTH };
     }
     if (u.indexOf('/api/metrics') !== -1) {
@@ -1151,7 +1151,13 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
     return { ok: false, status: 404, json: async () => null };
   };
 
-  await SXM.probeHealth();
+  /* 页面加载时会先探一次（那时 fetch 还没被测试换上桩）。必须先把它收掉，
+     否则 probeHealth 会复用那次进行中的请求，下面的断言其实一条都没跑
+     —— 这正是上一版假绿的成因，所以这里显式分两步。 */
+  sandbox.fetch = async () => { throw new TypeError('测试：暂无服务端'); };
+  await SXM.probeHealth();      // 收掉启动时那次
+  sandbox.fetch = healthStub;
+  await SXM.probeHealth();      // 这一次才真的用上面的桩探到
 
   // 服务端说「已实现」的，即使没配 key 也必须是「未接入·配上就能用」
   const ignav = SXM.adapterEntry('ignav');
@@ -1195,6 +1201,91 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   chk(drawerEl.classList.contains('open') === false, '关闭后 open 类被摘掉');
   chk(appEl.inert === false, '关闭后主内容解冻（inert 复位）');
   chk(FOCUSED === statusBtn, '焦点还给了当初打开抽屉的那个按钮');
+
+  /* ==========================================================================
+     探测语义："慢"不许被当成"没有"（2026-10-05 外部审计）
+     --------------------------------------------------------------------------
+     这是本项目最贵的一条状态 bug：超时若置 SERVER_OK = false，
+     liveCompare / liveFlights / 清单三处**全部直接早退**，
+     没有任何路径能把它改回来 —— 整个会话把服务端能力锁死，
+     而服务端其实活着，只是冷启动慢。
+     ========================================================================== */
+  say('\n— 服务端探测：慢 ≠ 没有 —');
+
+  const healthyFetch = healthStub;
+
+  /* 1) 先造出"上一轮已判定为不可用"的状态 —— 冷启动误判的等价起点 */
+  sandbox.fetch = async () => { throw new TypeError('Failed to fetch'); };
+  await SXM.probeHealth();
+  chk(SXM.serverOk === false, '连接失败(TypeError) → 判定为"不可用"，实际 ' + SXM.serverOk);
+
+  /* 2) 再让它一直超时：必须回到"未知"，绝不能停在 false。
+        停在 false 就是那条最贵的状态 bug：三条链全部永久早退。 */
+  let probeCalls = 0;
+  sandbox.fetch = async () => { probeCalls++; const e = new Error('probe timeout'); e.name = 'TimeoutError'; throw e; };
+  await SXM.probeHealth();
+  chk(probeCalls === 3, '超时后按退避重试了 3 次（实际 ' + probeCalls + ' 次）');
+  /* 探测结束后不许残留"进行中"状态 —— 否则后面的重探会被无声吞掉。
+     这条抓的是我这次真写出来的 bug：原来用布尔量做防重入，一旦某条路径没清干净，
+     之后所有 probeHealth() 都变成空操作（连启动时那次也会撞上），
+     而测试却全绿 —— 因为状态是别处兜过来的。 */
+  chk(SXM._probeInFlight === false, '探测结束后没有残留的"进行中"状态（否则后续重探会被无声吞掉）');
+  chk(SXM.serverOk === null,
+    '连续超时后是"未知"(null)，不是 false —— 置 false 会把比价/机票/清单三条链永久锁死（实际 ' + SXM.serverOk + '）');
+  chk(SXM.serverSlow === true, '同时标出"服务端较慢"，文案才能和"连不上"分开说');
+
+  /* 3) 超时之后**还能恢复** —— 这正是"锁死"与否的分水岭 */
+  sandbox.fetch = healthyFetch;
+  await SXM.probeHealth();
+  chk(SXM.serverOk === true, '超时之后一次成功探测就能恢复为可用（证明没被锁死）');
+  chk(SXM.serverSlow === false, '恢复后"较慢"标记被清掉');
+
+  /* 恢复健康状态，别影响后面其它断言 */
+  sandbox.fetch = healthyFetch;
+  await SXM.probeHealth();
+  chk(SXM.serverOk === true, '重探后回到可用状态');
+
+  /* ==========================================================================
+     门槛与清单上限：界面数字必须跟服务端走（审计 M4）
+     ========================================================================== */
+  say('\n— 清单门槛/上限：UI 数字跟随服务端 —');
+
+  const limitsFetch = (lim) => async (url) => (String(url).indexOf('/api/health') !== -1
+    ? { ok: true, json: async () => (lim ? Object.assign({}, HEALTH, { limits: lim }) : { ok: true, adapters: HEALTH.adapters }) }
+    : { ok: false, status: 404, json: async () => null });
+
+  const thEl = sandbox.document.getElementById('basket-th');
+  const mxEl = sandbox.document.getElementById('basket-max');
+
+  sandbox.fetch = limitsFetch({ basketThreshold: 25, basketMaxItems: 5 });
+  await SXM.probeHealth();
+  chk(thEl.textContent === '25', '门槛文案跟随服务端 limits.basketThreshold=25，实际 ' + thEl.textContent);
+  chk(mxEl.textContent === '5', '上限文案跟随 limits.basketMaxItems=5，实际 ' + mxEl.textContent);
+  chk(SXM.basketMax === 5, '校验阈值也跟随（不会"界面说 5、前端放到 8 再被服务端打回"）');
+
+  /* 服务端没报 limits（纯前端模式）→ 回落兜底值，且绝不能写出 undefined */
+  sandbox.fetch = limitsFetch(null);
+  await SXM.probeHealth();
+  chk(thEl.textContent === '10' && mxEl.textContent === '8',
+    '服务端没给 limits 时回落兜底 10/8，不出现 undefined（实际 ' +
+    thEl.textContent + '/' + mxEl.textContent + '）');
+  chk(SXM.basketMax === 8,
+    '回落时校验阈值也跟着回到 8（不能"文案显示 8、校验还用上一轮的 5"），实际 ' + SXM.basketMax);
+
+  /* ==========================================================================
+     离线清单：降级不该比比价卡少给入口（审计 L2）
+     ========================================================================== */
+  say('\n— 离线清单：降级也给同一组入口 —');
+
+  const platforms = SXM.shopPlatforms();
+  const offHtml = SXM.renderBasketOffline(['猫粮']);
+  const offHosts = new Set((offHtml.match(/https?:\/\/[^"' >]+/g) || [])
+    .map((u) => { try { return new URL(u).host; } catch { return u; } }));
+  /* 断言"和比价卡同一组"，而不是写死 6 —— 平台增减时这条不用改，
+     但"只给京东一个"这种缩水一定会红 */
+  chk(offHosts.size === platforms.length,
+    '离线清单给出的平台数与 SHOP_PLATFORMS 一致（' + offHosts.size + ' vs ' + platforms.length + '），不再只给第一个');
+  chk(offHosts.size >= 3, '至少给了 3 个主要平台，实际 ' + offHosts.size);
 
   say(`\n结果：${pass} 通过 / ${fail} 失败`);
   flush();

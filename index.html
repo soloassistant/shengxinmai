@@ -147,11 +147,11 @@
   </div>
   <div class="drawer-body">
     <div class="basket-input">
-      <label class="fine" for="basket-text">一行一件，最多 8 件</label>
+      <label class="fine" for="basket-text">一行一件，最多 <span id="basket-max">8</span> 件</label>
       <textarea id="basket-text" placeholder="猫粮&#10;洗衣液&#10;AirPods Pro 3"></textarea>
       <p class="basket-hint">
         我会逐件比价，然后回答一个问题：<strong>该分几家买，还是一家买齐？</strong><br>
-        差额小于麻烦门槛（默认 ¥10）时我会建议你图省事——为省三块钱多装两个 App，多数人不划算。
+        差额小于麻烦门槛（默认 ¥<span id="basket-th">10</span>）时我会建议你图省事——为省三块钱多装两个 App，多数人不划算。
       </p>
       <div class="basket-bar">
         <span class="basket-count" id="basket-count">0 件</span>

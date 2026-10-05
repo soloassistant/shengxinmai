@@ -876,13 +876,16 @@
 
   /** 纯前端模式下的清单：不给总价，只把入口摆好 —— 编一个总价比不给更糟 */
   function renderBasketOffline(queries) {
+    /* 降级也要和比价卡给**同一组**入口（2026-10-05 审计指出：原来只给
+       SHOP_PLATFORMS[0]=京东 一个，而比价卡给 6 个 —— 同为降级却能力不一致）。 */
+    const linksFor = (q) => SHOP_PLATFORMS.map((p) =>
+      `<a class="go" href="${p.url.replace('{q}', enc(q))}"
+          target="_blank" rel="noopener noreferrer">${esc(p.name)}</a>`).join('');
+
     const rows = queries.map((q) => `
       <div class="basket-item">
         <div><div class="bi-q">${esc(q)}</div><div class="bi-sub">本地算不了总账，先去平台看实时价</div></div>
-        <div class="bi-right">
-          <a class="go" href="${SHOP_PLATFORMS[0].url.replace('{q}', enc(q))}"
-             target="_blank" rel="noopener noreferrer">打开</a>
-        </div>
+        <div class="bi-links">${linksFor(q)}</div>
       </div>`).join('');
 
     return `
@@ -1738,28 +1741,95 @@
   let HEALTH_IDS = null;
   let HEALTH_LIMITS = null;
 
-  async function probeHealth() {
+  /* 「慢」和「没有」是两件事，必须分开（2026-10-05 外部审计指出，实测确认更严重）。
+     踩过的坑：原来只要 fetch 抛异常就一律 SERVER_OK = false，而 4s 超时在
+     冷启动唤醒下几乎必然触发。一旦置成 false，liveCompare / liveFlights / 清单
+     三处**全部直接早退** —— 没有任何代码路径能把它改回 true，于是整个会话把
+     服务端能力锁死，而服务端其实活着，只是慢。
+     现在：超时 = 还不知道（保持 null，还留着重试与恢复的机会）；
+           连不上（TypeError）= 确实没有，才置 false。 */
+  let SERVER_SLOW = false;
+  const PROBE_ATTEMPTS = 3;
+
+  /* 进行中的那一次探测。复用同一个 promise，而不是"直接 return 掉"：
+     若直接 return，调用方 await 到的是一个已完成的空操作 —— 状态没更新却以为更新了，
+     测试里会变成假绿/假红（这条就是写断言时被抓出来的：连续超时后状态竟然是 false）。
+     返回同一 promise 既避免了重复请求，又让 await 真的等到结果。 */
+  let probePromise = null;
+
+  function probeHealth() {
+    if (probePromise) return probePromise;
+    probePromise = probeOnce(1).finally(() => { probePromise = null; });
+    return probePromise;
+  }
+
+  async function probeOnce(n) {
     try {
-      const res = await fetch('/api/health', { signal: AbortSignal.timeout(4000) });
-      if (!res.ok) { SERVER_OK = false; return; }
+      /* 退避：第 1 次 4s，第 2 次 8s，第 3 次 12s。
+         冷启动唤醒常常十几秒，一次 4s 就宣判"没有服务端"是误判。 */
+      const res = await fetch('/api/health', { signal: AbortSignal.timeout(4000 * n) });
+      if (!res.ok) { SERVER_OK = false; SERVER_SLOW = false; return; }
       const h = await res.json();
-      if (!h.ok || !Array.isArray(h.adapters)) { SERVER_OK = false; return; }
+      if (!h.ok || !Array.isArray(h.adapters)) { SERVER_OK = false; SERVER_SLOW = false; return; }
       SERVER_OK = true;
+      SERVER_SLOW = false;
       /* 服务端的 adapters 列表 = **真的实现了的数据源**。
          记成集合，抽屉据此区分「配 key 就能用」和「配了也没用」。
          踩过的坑：以前这里只回填 live，抽屉就把所有没配 key 的都写成
          "未接入"，等于向用户承诺了一些后端压根没有的数据源。 */
       HEALTH_IDS = new Set(h.adapters.map((a) => a.id));
       HEALTH_LIMITS = (h.limits && typeof h.limits === 'object') ? h.limits : null;
+      applyLimits();                    // 门槛/上限的数字以服务端为准，别再硬编码两份
       h.adapters.forEach((a) => {
         const t = ADAPTER_REGISTRY.find((x) => x.id === a.id);
         if (t) t.live = !!a.configured;
       });
       refreshDot();
       renderDrawer();
-    } catch {
-      SERVER_OK = false;
+    } catch (e) {
+      const name = (e && e.name) || '';
+      // AbortSignal.timeout 抛的是 TimeoutError；连接被拒 / 无服务端是 TypeError
+      if (name === 'TimeoutError' || name === 'AbortError') {
+        SERVER_SLOW = true;
+        if (n < PROBE_ATTEMPTS) {
+          renderDrawer();               // 让抽屉显示"响应慢、正在重试"，而不是"没有服务端"
+          await new Promise((r) => setTimeout(r, 600 * n));
+          return probeOnce(n + 1);      // 整条重试链一起 await，别 fire-and-forget
+        }
+        /* 重试完仍然超时：**刻意不置 false**。
+           置了 false 就再也回不来了（三处调用点都会早退）。
+           保持 null = "还不知道"，后面的真实请求还有机会成功并把状态改正。 */
+        if (SERVER_OK !== true) SERVER_OK = null;
+        renderDrawer();
+        return;
+      }
+      SERVER_OK = false;                // 确确实实连不上
+      SERVER_SLOW = false;
+      renderDrawer();
     }
+  }
+
+  /* 门槛与清单上限的"唯一事实来源"是服务端的 /api/health.limits。
+     纯前端模式（或服务端没报这两项）时才回落到这里的兜底值 ——
+     兜底值必须和服务端默认值一致（server.js 的 BASKET_MAX_ITEMS、
+     server/lib/basket.js 的 DEFAULT_THRESHOLD），否则两个数字会各说各话。
+     审计指出的问题：改服务端阈值而 UI 不跟，用户按旧数字做决策。 */
+  const FALLBACK_THRESHOLD = 10;
+  const FALLBACK_MAX_ITEMS = 8;
+
+  /** 把服务端报的门槛/上限落到界面上（文案 + 校验阈值都跟随） */
+  function applyLimits() {
+    const lim = HEALTH_LIMITS || {};
+    const th = Number(lim.basketThreshold);
+    const mx = Number(lim.basketMaxItems);
+    const thEl = $('#basket-th');
+    const mxEl = $('#basket-max');
+    /* 拿不到就保持页面里已有的兜底文案 —— 绝不写出 "¥undefined" 或 "最多 undefined 件" */
+    if (thEl) thEl.textContent = String(Number.isFinite(th) ? th : FALLBACK_THRESHOLD);
+    if (mxEl) mxEl.textContent = String(Number.isFinite(mx) ? mx : FALLBACK_MAX_ITEMS);
+    /* 校验阈值必须和上面显示的数字**永远一致**：服务端没报就回落到兜底值，
+       不能"文案显示 8、校验用上一轮的 5"。 */
+    BASKET_MAX = (Number.isFinite(mx) && mx > 0) ? mx : FALLBACK_MAX_ITEMS;
   }
 
   /**
@@ -2068,7 +2138,9 @@
        （"买北京烤鸭和天津麻花"这种），猜错一次用户就再也不会用了。
        清单是结构化任务，就给结构化的输入。
      ====================================================================== */
-  const BASKET_MAX = 8;
+  /* 上限以服务端 /api/health.limits.basketMaxItems 为准（applyLimits 会改写它）。
+     这里只放兜底值，别在别处再写一个 8。 */
+  let BASKET_MAX = FALLBACK_MAX_ITEMS;
   const basketEl   = $('#basket');
   const basketMask = $('#basket-mask');
   const basketTa   = $('#basket-text');
@@ -2274,11 +2346,19 @@
       ? '<span class="tag tag-ok">服务端已连接</span>'
       : SERVER_OK === false
         ? '<span class="tag tag-mute">纯前端模式</span>'
-        : '<span class="tag tag-mute">探测中</span>';
+        : SERVER_SLOW
+          ? '<span class="tag tag-mute">服务端较慢 · 重试中</span>'
+          : '<span class="tag tag-mute">探测中</span>';
 
+    /* 文案必须和代码能力一致。原来只分"连上/没连上"两种，于是冷启动那次超时
+       会把一个活着的服务端说成"没有"；而"启动服务端后会自动切换"这句
+       在当时是**做不到的承诺**（锁死后没有任何路径能恢复）。
+       现在超时与连不上分开说，且恢复路径真的存在（重试 + online 重探 + 开抽屉重探）。 */
     const serverNote = SERVER_OK === false
       ? '没有连上 <code>/api/compare</code>，所以比价走「手动比价」——把各平台搜索页一次摆好。<br>启动服务端后（<code>node server/server.js</code>）会自动切换成真实比价。'
-      : '';
+      : SERVER_SLOW
+        ? '服务端<strong>响应慢</strong>，正在重试。慢不等于没有——这期间比价仍会尝试走服务端，拿到结果就用真实价格。'
+        : '';
 
     /* 降价关注的管理入口放这里而不是顶栏：它和接入状态一样，是低频动作 */
     const wl = watchList();
@@ -2380,6 +2460,9 @@
   }
 
   function openDrawer()  {
+    /* 之前探失败或超时就顺手重探一次 —— 这样文案里"会自动切换"才真的成立，
+       而不是一句做不到的承诺。probeHealth 自带 in-flight 去重，连点也不会叠加。 */
+    if (SERVER_OK !== true) probeHealth();
     renderDrawer();
     drawer.classList.add('open'); mask.classList.add('open');
     focusInto(drawer);                      // 锁住主内容 + 焦点移进抽屉
@@ -2524,7 +2607,13 @@
   refreshDot();
   renderDrawer();
   renderRecent();
+  applyLimits();      // 先按兜底值渲染一次，探测回来后再按服务端的真实值覆盖
   probeHealth();
+
+  /* 断网重连后自动重探：从"没有服务端"恢复过来的一条真实路径（另一条是开抽屉时重探） */
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('online', () => { if (SERVER_OK !== true) probeHealth(); });
+  }
 
   /* ?demo=1 直接进演示模式，?q= 指定商品 —— 两种模式都认。
      这是分享深链的另一半：比价卡上的「分享链接」生成的就是这样的 URL，
@@ -2554,6 +2643,7 @@
     adapterStatus, sourceImplemented, fmtHumanY,
     adapterEntry: (id) => ADAPTER_REGISTRY.find((x) => x.id === id) || null,
     adapterCatalog: () => ADAPTER_REGISTRY,
+    shopPlatforms: () => SHOP_PLATFORMS,
     openDrawer, closeDrawer, openBasket, closeBasket,
     greatCircle, estimateModes, humanHours, modeVerdict, CITY_GEO,
     probeHealth, liveCompare,
@@ -2570,6 +2660,10 @@
     get theme() { return THEME; },
     get isDark() { return isDarkNow(); },
     get serverOk() { return SERVER_OK; },
+    get serverSlow() { return SERVER_SLOW; },
+    get _probeInFlight() { return !!probePromise; },
+    get basketMax() { return BASKET_MAX; },
+    applyLimits,
     get lastError() { return lastLiveError; },
     setDemo(v) { DEMO_MODE = !!v; renderDrawer(); },
     setAdapters(list) {
