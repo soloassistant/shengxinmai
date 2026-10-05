@@ -41,7 +41,7 @@ const { createCache, normKey } = require('./lib/cache');
 const { createRateLimiter } = require('./lib/ratelimit');
 const { createMetrics } = require('./lib/metrics');
 const { createStore, titleFingerprint } = require('./lib/store');
-const { computeBasket } = require('./lib/basket');
+const { computeBasket, DEFAULT_THRESHOLD } = require('./lib/basket');
 const { settle } = require('./lib/http');
 const { loadEnvFile } = require('./lib/envfile');
 
@@ -264,16 +264,35 @@ async function getFlights(q, rid) {
 /* ---------- 路由 ---------- */
 async function api(req, res, p, url, rid) {
   if (p === '/api/health') {
+    /* 这份列表就是**「哪些数据源真的实现了」的唯一事实来源**。
+       前端抽屉不再自己猜：出现在这里的 = 有 adapter（配了 key 就能用），
+       不出现的 = 当前版本没实现（配了 key 也没用）。
+       踩过的坑：机票适配器（ignav）早就实现了，却没进这个列表，
+       于是抽屉把它按"未接入·配 key 即可"展示 —— 用户配了也用不上，
+       因为前端压根不知道它其实已经可用。 */
     const list = status(process.env);
+    const flight = {
+      id: flightAdapter.id,
+      name: flightAdapter.name,
+      platform: flightAdapter.platform,
+      doc: flightAdapter.doc,
+      note: flightAdapter.note,
+      envKeys: flightAdapter.envKeys,
+      configured: flightAdapter.isConfigured(process.env),
+      implemented: true
+    };
+    const all = list.concat([flight]);
     return json(res, 200, {
       ok: true,
-      configuredCount: list.filter((x) => x.configured).length,
-      adapters: list,
+      configuredCount: all.filter((x) => x.configured).length,
+      adapters: all,
       limits: {
         compareCacheMs: CACHE_TTL,
         rateBurst: RL_BURST,
         ratePerSec: RL_RATE,
-        basketMaxItems: BASKET_MAX_ITEMS
+        basketMaxItems: BASKET_MAX_ITEMS,
+        // 前端不用再自己兜底一个数 —— 兜底值一旦和这里不一致就会打架
+        basketThreshold: DEFAULT_THRESHOLD
       }
     }, rid);
   }
@@ -345,7 +364,15 @@ async function api(req, res, p, url, rid) {
         '「' + tooLong.slice(0, 12) + '…」太长了，单件上限 ' + BASKET_MAX_LEN + ' 字', rid);
     }
 
-    const thParam = Number(url.searchParams.get('th'));
+    /* ⚠ 这里踩过一个很贵的坑（2026-10-05 定位到）：
+       原来写的是 `Number(url.searchParams.get('th'))`。参数**没传**时
+       get('th') 返回 null，而 Number(null) === 0 —— 于是 0 通过了
+       `>= 0` 的校验，被当成用户显式指定了「门槛 0 元」，
+       服务端自己的默认值 10 从此**一次都没生效**，卡片上一直显示「麻烦门槛 ¥0」。
+       教训：把「参数缺失」和「参数是 0」分开判断，别让 Number() 把 null 抹成 0。
+       —— 缺失 → NaN → undefined → 交给 computeBasket 用默认值。 */
+    const thRaw = url.searchParams.get('th');
+    const thParam = thRaw == null || thRaw === '' ? NaN : Number(thRaw);
     const saveThreshold = Number.isFinite(thParam) && thParam >= 0 ? thParam : undefined;
 
     const ckey = 'bsk:' + raw.map(normKey).join('|') + '|th' + (saveThreshold == null ? 'def' : saveThreshold);

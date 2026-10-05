@@ -13,6 +13,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const vm = require('node:vm');
 
 const LOG = [];
 const say = (s) => { LOG.push(s); console.log(s); };
@@ -403,6 +404,54 @@ say('\n— 聚合并发 —');
       check(flNoDate.status === 400, '缺日期返回 400');
       const flBadDate = await fetch(base + '/api/flights?from=BJS&to=SHA&date=2026/10/20');
       check(flBadDate.status === 400, '日期格式不对返回 400（不要 2026/10/20 这种）');
+
+      /* ---- /api/health 必须如实反映"哪些真的实现了" ---- */
+      const healthAll = await (await fetch(base + '/api/health')).json();
+      const healthIds = healthAll.adapters.map((a) => a.id);
+
+      check(healthAll.adapters.every((a) => a.implemented === true),
+        '/api/health 的每条 adapter 都显式标了 implemented');
+      check(healthIds.indexOf('ignav') !== -1,
+        '机票适配器 ignav 出现在 /api/health 里（它早就实现了，以前漏报导致界面说"配了也没用"');
+      check(healthAll.limits && healthAll.limits.basketThreshold === 10,
+        '/api/health 报出了 basketThreshold=10，前端不用自己兜底一个可能打架的数');
+
+      /* ---- 防漂移：前端目录（data.js）↔ 服务端事实（/api/health）双向核对 ----
+         这是本次修复的**核心保险**：只要有人在 data.js 里加一个"已实现"的数据源
+         却没写 adapter，或者写了 adapter 却忘了登记，这条断言立刻变红。
+         没有它，两边迟早再次各说各话。 */
+      const dataSrc = fs.readFileSync(path.join(__dirname, '..', 'data.js'), 'utf8');
+      const catMatch = /const ADAPTER_REGISTRY = (\[[\s\S]*?\n\]);/.exec(dataSrc);
+      check(!!catMatch, '能从 data.js 里读出 ADAPTER_REGISTRY 目录');
+      const catalog = catMatch ? vm.runInNewContext('(' + catMatch[1] + ')') : [];
+
+      const implIds   = catalog.filter((c) => !c.planned).map((c) => c.id);
+      const plannedIds = catalog.filter((c) => c.planned).map((c) => c.id);
+      const missing = implIds.filter((id) => healthIds.indexOf(id) === -1);
+      const leaked  = plannedIds.filter((id) => healthIds.indexOf(id) !== -1);
+      const orphan  = healthIds.filter((id) => !catalog.some((c) => c.id === id));
+
+      check(missing.length === 0,
+        '目录里标"已实现"的每个数据源，服务端都真的有 adapter' + (missing.length ? '：缺 ' + missing.join(',') : ''));
+      check(leaked.length === 0,
+        '目录里标"规划中"的，服务端确实没有' + (leaked.length ? '：却出现了 ' + leaked.join(',') : ''));
+      check(orphan.length === 0,
+        '服务端有的每个 adapter，前端目录里都有条目（否则界面会漏展示）' + (orphan.length ? '：多出 ' + orphan.join(',') : ''));
+      check(plannedIds.length === 3, '当前有 3 个"规划中"的数据源（haodanku / meituan / ctrip），实际 ' + plannedIds.length);
+
+      /* ---- 「麻烦门槛」¥0 的回归：不传 th 必须用默认值，别被 Number(null) 抹成 0 ---- */
+      const bkDefault = await (await fetch(base + '/api/basket?q=' + encodeURIComponent('猫粮') + '&q=' + encodeURIComponent('洗衣液'))).json();
+      check(bkDefault.threshold === 10,
+        '不传 th 时门槛用默认值 10（不是被 Number(null) 抹成的 0），实际 ' + bkDefault.threshold);
+      check(bkDefault.notes.some((n) => /麻烦门槛 ¥10/.test(n)),
+        '提示文案里写的是「麻烦门槛 ¥10」而不是 ¥0');
+
+      /* 但用户**显式**传 th=0 是合法意图（"一分钱都嫌麻烦"），不能也被当成缺失 */
+      const bkZero = await (await fetch(base + '/api/basket?q=' + encodeURIComponent('猫粮') + '&th=0')).json();
+      check(bkZero.threshold === 0, '显式传 th=0 仍然生效（缺失与 0 是两回事），实际 ' + bkZero.threshold);
+
+      const bkFive = await (await fetch(base + '/api/basket?q=' + encodeURIComponent('猫粮') + '&th=5')).json();
+      check(bkFive.threshold === 5, '显式传 th=5 生效，实际 ' + bkFive.threshold);
     }
   } finally {
     proc.kill();

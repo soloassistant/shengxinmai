@@ -170,15 +170,19 @@ const SEAT_GUIDE = [
 ];
 
 /* ---------- 6. 平台接入状态（抽屉里展示） ---------- */
-/* live=true 表示检测到该平台密钥已配置 */
+/* live=true 表示检测到该平台密钥已配置（由 /api/health 回填，前端不猜）。
+   planned=true 表示**当前版本后端没有这个 adapter** —— 用户配了 key 也没用。
+   ⚠ planned 与「服务端真的有实现」必须保持一致，否则界面又在骗人。
+     有 test-server.js 的断言盯着这两者不漂移（catalog ↔ /api/health 双向核对）。 */
 const ADAPTER_REGISTRY = [
   { id:'dataoke', name:'大淘客开放平台', scope:'淘宝 / 京东 / 拼多多 商品比价', person:'个人可注册', env:'DATAOKE_APP_KEY / DATAOKE_APP_SECRET' },
-  { id:'haodanku', name:'好单库开放平台', scope:'美团 · 饿了么 本地生活券', person:'个人可注册', env:'HAODANKU_APP_KEY / HAODANKU_APP_SECRET' },
+  { id:'haodanku', name:'好单库开放平台', scope:'美团 · 饿了么 本地生活券', person:'个人可注册', env:'HAODANKU_APP_KEY / HAODANKU_APP_SECRET', planned:true },
   { id:'jd', name:'京东联盟', scope:'京东商品与佣金', person:'个人可注册（需流量证明）', env:'JD_UNION_APP_KEY / JD_UNION_APP_SECRET' },
   { id:'pdd', name:'多多进宝', scope:'拼多多商品与佣金', person:'个人可注册（最宽松）', env:'PDD_CLIENT_ID / PDD_CLIENT_SECRET' },
-  { id:'meituan', name:'美团分销联盟', scope:'外卖 CPS', person:'需企业营业执照', env:'MEITUAN_APP_KEY / MEITUAN_APP_SECRET' },
-  { id:'ctrip', name:'携程开放平台', scope:'机票 / 酒店分销', person:'需企业营业执照', env:'CTRIP_APP_KEY / CTRIP_APP_SECRET' },
+  { id:'meituan', name:'美团分销联盟', scope:'外卖 CPS', person:'需企业营业执照', env:'MEITUAN_APP_KEY / MEITUAN_APP_SECRET', planned:true },
+  { id:'ctrip', name:'携程开放平台', scope:'机票 / 酒店分销', person:'需企业营业执照', env:'CTRIP_APP_KEY / CTRIP_APP_SECRET', planned:true },
   /* 机票实时报价的可行通道：聚合型 API 对个人开放，跟上面携程那条是两条不同的路。
-     2026-09-29 查实：ignav 免费 1000 次、个人自助注册、market=CN 出人民币价。 */
+     2026-09-29 查实：ignav 免费 1000 次、个人自助注册、market=CN 出人民币价。
+     这个是**已经实现**的（server/adapters/ignav.js），不是规划项。 */
   { id:'ignav', name:'ignav 航班数据', scope:'机票实时报价（按价格排序）', person:'个人可注册（免费 1000 次，无需信用卡）', env:'IGNAV_API_KEY' }
 ];

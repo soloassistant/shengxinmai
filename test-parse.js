@@ -16,31 +16,80 @@ const say = (s) => { LOG.push(s); console.log(s); };
 const flush = () => fs.writeFileSync(path.join(__dirname, 'test-out.txt'), LOG.join('\n'), 'utf8');
 
 /* ---------- 最小 DOM 桩子 ---------- */
-function makeEl() {
+/* 2026-10-05 升级：classList 变成**真的有状态**的（原来 add/remove 是空函数），
+   querySelector 按选择器**记住同一个元素**（原来每次返回新对象）。
+   为什么要改：抽屉的三态与 inert 都是"改状态 → 读状态"，桩子是空的话
+   就只能去断言拼接出来的 HTML 字符串，那种断言改成什么样都能通过。
+   现在能真的检查 `classList.contains('open')` 和 `el.inert`。
+   顺带更像真 DOM：同一个选择器本来就该返回同一个节点。 */
+function makeEl(tag) {
+  const cls = new Set();
+  const kids = new Map();     // 元素自己的子查询结果，同一选择器返回同一个节点
   const el = {
-    className: '', id: '', innerHTML: '', value: '', disabled: false,
-    dataset: {}, attrs: {},
-    setAttribute(n, v) { this.attrs[n] = v; },
-    classList: { add() {}, remove() {}, contains() { return false; } },
+    tagName: (tag || 'div').toUpperCase(),
+    className: '', id: '', innerHTML: '', value: '', disabled: false, hidden: false,
+    inert: false,
+    dataset: {}, attrs: {}, style: {},
+    setAttribute(n, v) { this.attrs[n] = v; if (n === 'id') this.id = v; },
+    getAttribute(n) { return n in this.attrs ? this.attrs[n] : null; },
     addEventListener() {}, appendChild() {}, remove() {},
-    focus() {}, closest() { return null; },
+    focus() { FOCUSED = el; },
+    closest() { return null; },
+    /* 元素级 querySelector 必须能返回一个**真的可聚焦**的节点。
+       原来恒返回 null，于是 focusInto() 里的 first 永远是 null、从不 focus ——
+       这让"焦点移进抽屉""焦点还给按钮"两条断言全都恒真。
+       变异实验当场拆穿：把关抽屉的焦点恢复整段删掉，断言照样全绿。 */
+    querySelector(sel) {
+      if (!kids.has(sel)) { const k = makeEl(); ALL_ELS.push(k); kids.set(sel, k); }
+      return kids.get(sel);
+    },
+    querySelectorAll() { return []; },
     dispatchEvent() {},
   };
+  el.classList = {
+    add(...c) { c.forEach((x) => cls.add(x)); el.className = [...cls].join(' '); },
+    remove(...c) { c.forEach((x) => cls.delete(x)); el.className = [...cls].join(' '); },
+    contains(c) { return cls.has(c); },
+    toggle(c, on) {
+      const want = (on === undefined) ? !cls.has(c) : !!on;
+      want ? cls.add(c) : cls.delete(c);
+      el.className = [...cls].join(' ');
+      return want;
+    },
+  };
+  ALL_ELS.push(el);
   return el;
 }
 
+/* 桩版"文档里有哪些节点" —— document.contains 要给真话，
+   否则 restoreFocus 会因为"元素不在文档里"而跳过聚焦（又是桩子造成的假红）。 */
+const ALL_ELS = [];
+
+/* 同一个选择器 → 同一个元素（真 DOM 就是这样，桩子不该比真 DOM 更宽松） */
+const EL_BY_SEL = new Map();
+const elFor = (sel) => {
+  if (!EL_BY_SEL.has(sel)) EL_BY_SEL.set(sel, makeEl());
+  return EL_BY_SEL.get(sel);
+};
+let FOCUSED = null;                    // 记录最后一次 focus() 落在谁身上
+
 const STORE = {};
 const DOC_EL = makeEl(); // documentElement 必须是同一个对象，applyTheme 反复往它身上写
+const BODY_EL = makeEl();
+BODY_EL.scrollHeight = 0;
 const sandbox = {
   console,
   setTimeout: (fn) => fn(),
   Event: class Event { constructor(t, o) { this.type = t; Object.assign(this, o); } },
+  AbortSignal: { timeout: () => undefined },   // probeHealth / liveCompare 都要它
   document: {
-    querySelector: () => makeEl(),
-    createElement: () => makeEl(),
+    querySelector: (s) => elFor(s),
+    getElementById: (s) => elFor('#' + s),
+    createElement: (t) => makeEl(t),
     addEventListener() {},
+    contains: (el) => ALL_ELS.indexOf(el) !== -1,
     documentElement: DOC_EL,
-    body: { scrollHeight: 0 },
+    body: BODY_EL,
   },
   window: { scrollTo() {}, addEventListener() {} },
   localStorage: {
@@ -49,6 +98,10 @@ const sandbox = {
     removeItem: (k) => { delete STORE[k]; },
   },
 };
+/* activeElement 必须是真的 —— 抽屉的焦点管理读它来决定"焦点从哪来的"。
+   桩子里恒为 undefined 的话，restoreFocus 就永远没东西可还，
+   于是"焦点还给触发按钮"这条断言会假红（是桩子的错，不是代码的错）。 */
+Object.defineProperty(sandbox.document, 'activeElement', { get: () => FOCUSED });
 sandbox.window = sandbox.window || {};
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
@@ -1022,6 +1075,128 @@ for (const [okFlag, label] of webOnlyChecks) {
   if (okFlag) { pass++; say(`✓  ${label}`); } else { fail++; say(`✗  ${label}`); }
 }
 
-say(`\n结果：${pass} 通过 / ${fail} 失败`);
-flush();
-process.exit(fail ? 1 : 0);
+const chk = (cond, label) => { if (cond) { pass++; say(`✓  ${label}`); } else { fail++; say(`✗  ${label}`); } };
+
+/* ==========================================================================
+   日期：跨年推断 + 年份显示
+   --------------------------------------------------------------------------
+   外部审计说「1月5日 会被推成已经过去的 2026-01-05」—— 实测**不成立**，
+   代码里早就有顺延（`if (d < base) d = new Date(y+1, ...)`）。
+   但审计有一点对：label 不带年份时，「1月5日 周二」看不出是明年。
+   这里不写"某月某日必须等于某个年份"（跑在不同日期就会假红），
+   而是钉三个**永远成立的承诺**，它们才是这段逻辑真正的契约。
+   ========================================================================== */
+say('\n— 日期：跨年与年份显示 —');
+
+const L2 = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+const TODAY0 = new Date(); TODAY0.setHours(0, 0, 0, 0);
+
+// 承诺1：解析出来的绝对日期**永远不会是过去**（这是最要紧的一条）
+let anyPast = null;
+for (const t of ['1月1日', '1月5日', '3月15日', '6月1日', '9月30日', '12月31日', '10月1日', '2月28日']) {
+  const r = SXM.parseDate(t);
+  if (!r || !r.date) continue;
+  if (r.date.getTime() < TODAY0.getTime()) anyPast = t + ' → ' + L2(r.date);
+}
+chk(anyPast === null, '解析出的日期都落在今天或以后（没有过去日期）' + (anyPast ? '，但 ' + anyPast : ''));
+
+// 承诺2：年份与今年不同时，label 必须把年份写出来
+const crossYear = SXM.parseDate('1月1日');
+const lastYearSameMonth = new Date(TODAY0.getFullYear(), 0, 1);   // 今年 1 月 1 日
+if (lastYearSameMonth.getTime() >= TODAY0.getTime()) {
+  // 今天就是 1 月 1 日（或之前），这条不适用
+  chk(true, '（今天在 1 月 1 日之前，跨年用例跳过）');
+} else {
+  chk(crossYear && crossYear.date && crossYear.date.getFullYear() === TODAY0.getFullYear() + 1,
+    '「1月1日」已过去 → 顺延到明年（' + (crossYear && crossYear.date ? L2(crossYear.date) : 'null') + '）');
+  chk(crossYear && /^\d{4}年/.test(crossYear.label),
+    '跨年的 label 带上了年份：' + (crossYear && crossYear.label));
+}
+
+// 承诺3：同一年内的日期**不要**挂年份（否则每张出行卡都啰嗦一个"2026年"）
+const tomorrow = SXM.parseDate('明天');
+chk(tomorrow && !/^\d{4}年/.test(tomorrow.label),
+  '同年的日期不显示年份：' + (tomorrow && tomorrow.label));
+
+// 不存在的日子仍然拦住（回归：别为了补年份把这条弄丢）
+const bad = SXM.parseDate('2月30日');
+chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这一天不存在」，没有偷偷顺延');
+
+/* ==========================================================================
+   抽屉三态 / inert / 焦点（异步：要等 /api/health 回来）
+   ========================================================================== */
+(async () => {
+  say('\n— 数据源清单：不许承诺后端没有的东西 —');
+
+  /* 桩 /api/health：服务端「真的有实现」的是 dataoke/jd/pdd/ignav。
+     ctrip/meituan/haodanku 不在列表里 —— 这正是抽屉必须区分开的事实。 */
+  const HEALTH = {
+    ok: true, configuredCount: 0,
+    adapters: [
+      { id: 'dataoke', name: '淘宝 / 天猫', configured: false, implemented: true, envKeys: ['DATAOKE_APP_KEY'] },
+      { id: 'jd', name: '京东', configured: false, implemented: true, envKeys: ['JD_UNION_APP_KEY'] },
+      { id: 'pdd', name: '拼多多', configured: false, implemented: true, envKeys: ['PDD_CLIENT_ID'] },
+      { id: 'ignav', name: '机票实时报价', configured: false, implemented: true, envKeys: ['IGNAV_API_KEY'] },
+    ],
+    limits: { basketThreshold: 10, basketMaxItems: 8 },
+  };
+  sandbox.fetch = async (url) => {
+    const u = String(url);
+    if (u.indexOf('/api/health') === 0 || u.indexOf('/api/health') !== -1) {
+      return { ok: true, json: async () => HEALTH };
+    }
+    if (u.indexOf('/api/metrics') !== -1) {
+      return { ok: true, json: async () => ({ ok: true, requests: 0, platforms: [] }) };
+    }
+    return { ok: false, status: 404, json: async () => null };
+  };
+
+  await SXM.probeHealth();
+
+  // 服务端说「已实现」的，即使没配 key 也必须是「未接入·配上就能用」
+  const ignav = SXM.adapterEntry('ignav');
+  const stIgnav = SXM.adapterStatus(ignav);
+  chk(stIgnav.tag === '未接入' && /配上就能用/.test(stIgnav.text),
+    'ignav（后端已实现、未配 key）→ 「未接入 · 配上就能用」');
+
+  // 服务端**没有**的，绝不能再说"配上就能用" —— 那是让人白折腾的谎
+  const ctrip = SXM.adapterEntry('ctrip');
+  const stCtrip = SXM.adapterStatus(ctrip);
+  chk(stCtrip.tag === '规划中', 'ctrip（后端无 adapter）→ 「规划中」，实际 ' + stCtrip.tag);
+  chk(/不会生效/.test(stCtrip.text), '规划中的说明写明「配了 key 也不会生效」');
+
+  const haodanku = SXM.adapterEntry('haodanku');
+  chk(SXM.adapterStatus(haodanku).tag === '规划中', 'haodanku（后端无 adapter）→ 「规划中」');
+
+  // 配好 key 的（live）优先级最高
+  SXM.setAdapters(['pdd']);
+  chk(SXM.adapterStatus(SXM.adapterEntry('pdd')).tag === '已接入', 'pdd 标记为已接入 → 「已接入」');
+
+  /* ---------- inert 与焦点 ---------- */
+  say('\n— 抽屉：inert 与焦点 —');
+
+  const appEl = elFor('.app');
+  const drawerEl = elFor('#drawer');
+  const statusBtn = elFor('#btn-status');
+  // 抽屉内部那个可聚焦节点 —— 焦点应该落到它身上
+  const drawerFocusable = drawerEl.querySelector('button, [href], input, textarea, select');
+
+  FOCUSED = statusBtn;                      // 假装用户是用键盘点开抽屉的
+  statusBtn.focus();
+  SXM.openDrawer();
+
+  chk(drawerEl.classList.contains('open'), '抽屉打开后带上了 open 类');
+  chk(appEl.inert === true, '抽屉打开时主内容被 inert 锁住（Tab 不会穿到被遮住的元素）');
+  /* 断言必须落在**具体那个节点**上，不能只写"FOCUSED 不是 appEl" ——
+     后者恒真（appEl 从来不会被聚焦），是条装饰。 */
+  chk(FOCUSED === drawerFocusable, '焦点确实落到了抽屉内的可聚焦元素上');
+
+  SXM.closeDrawer();
+  chk(drawerEl.classList.contains('open') === false, '关闭后 open 类被摘掉');
+  chk(appEl.inert === false, '关闭后主内容解冻（inert 复位）');
+  chk(FOCUSED === statusBtn, '焦点还给了当初打开抽屉的那个按钮');
+
+  say(`\n结果：${pass} 通过 / ${fail} 失败`);
+  flush();
+  process.exit(fail ? 1 : 0);
+})();

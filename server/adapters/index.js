@@ -22,7 +22,10 @@ function status(env) {
     doc: a.doc,
     note: a.note,
     envKeys: a.envKeys,
-    configured: a.isConfigured(env)
+    configured: a.isConfigured(env),
+    // 显式声明"这个真的实现了"。前端据此区分「配 key 就能用」和「配了也没用」，
+    // 不再把两者都笼统写成"未接入"。
+    implemented: true
   }));
 }
 

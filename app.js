@@ -91,6 +91,17 @@
   function fmtHuman(d) {
     return (d.getMonth() + 1) + '月' + d.getDate() + '日 周' + WEEK_CN[d.getDay()];
   }
+  /**
+   * 跨年时把年份写出来：「2027年1月5日 周二」。
+   * 只写「1月5日 周二」的话，用户会默认它是自己刚过去那个 1 月（已过期），
+   * 而它其实是明年的 —— 这种模糊会让整张出行卡的可信度打折。
+   * 同一年内不长，避免每张卡都挂个"2026年"显得啰嗦。
+   */
+  function fmtHumanY(d, base) {
+    const b = base || baseToday();
+    const prefix = d.getFullYear() !== b.getFullYear() ? d.getFullYear() + '年' : '';
+    return prefix + fmtHuman(d);
+  }
   /** 时间戳 →「18:35」。用于标注价格是什么时候查的（价格按小时在变）。 */
   function fmtClock(ts) {
     const d = new Date(Number(ts) || Date.now());
@@ -120,14 +131,14 @@
           return { date: null, label: mo + '月' + da + '日', explicit: true, invalid: true };
         }
         if (d.getTime() < base.getTime()) d = new Date(base.getFullYear() + 1, mo - 1, da);
-        return { date: d, label: fmtHuman(d), explicit: true };
+        return { date: d, label: fmtHumanY(d), explicit: true };
       }
     }
 
-    if (/大后天/.test(text)) { const d = addDays(base, 3); return { date: d, label: fmtHuman(d), explicit: true }; }
-    if (/后天/.test(text))   { const d = addDays(base, 2); return { date: d, label: fmtHuman(d), explicit: true }; }
-    if (/明天|明日|明儿/.test(text)) { const d = addDays(base, 1); return { date: d, label: fmtHuman(d), explicit: true }; }
-    if (/今天|今日|今晚|今儿/.test(text)) { return { date: base, label: fmtHuman(base) + '（今天）', explicit: true }; }
+    if (/大后天/.test(text)) { const d = addDays(base, 3); return { date: d, label: fmtHumanY(d), explicit: true }; }
+    if (/后天/.test(text))   { const d = addDays(base, 2); return { date: d, label: fmtHumanY(d), explicit: true }; }
+    if (/明天|明日|明儿/.test(text)) { const d = addDays(base, 1); return { date: d, label: fmtHumanY(d), explicit: true }; }
+    if (/今天|今日|今晚|今儿/.test(text)) { return { date: base, label: fmtHumanY(base) + '（今天）', explicit: true }; }
 
     const map = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 0, '天': 0 };
     const thisMon = addDays(base, -(((base.getDay() + 6) % 7)));   // 本周一
@@ -137,7 +148,7 @@
     if (m) {
       const t = map[m[1]];
       const d = addDays(addDays(thisMon, 7), t === 0 ? 6 : t - 1);
-      return { date: d, label: fmtHuman(d), explicit: true };
+      return { date: d, label: fmtHumanY(d), explicit: true };
     }
     // 周X / 星期X / 礼拜X —— 取「还没到的那一个」
     m = text.match(/(?:周|星期|礼拜)\s*([一二三四五六日天])/);
@@ -145,7 +156,7 @@
       const t = map[m[1]];
       let d = addDays(thisMon, t === 0 ? 6 : t - 1);
       if (d.getTime() <= base.getTime()) d = addDays(d, 7);
-      return { date: d, label: fmtHuman(d), explicit: true };
+      return { date: d, label: fmtHumanY(d), explicit: true };
     }
 
     return null;
@@ -1026,7 +1037,7 @@
 
     // 日期没给 → 按明天算，但必须在卡上写明这是默认值
     const fallback = addDays(baseToday(), 1);
-    const d = date || { date: fallback, label: fmtHuman(fallback), explicit: false };
+    const d = date || { date: fallback, label: fmtHumanY(fallback), explicit: false };
     const iso = fmtISO(d.date);
 
     const fromCode = (CITY_AIR[from] || '').toUpperCase();
@@ -1723,6 +1734,10 @@
      注意"没配密钥"不算失败 —— 那是预期状态，不该弹错误提示。 */
   let lastLiveError = '';
 
+  /* 服务端权威的「已实现数据源」集合。null = 还没探测到（纯前端模式）。 */
+  let HEALTH_IDS = null;
+  let HEALTH_LIMITS = null;
+
   async function probeHealth() {
     try {
       const res = await fetch('/api/health', { signal: AbortSignal.timeout(4000) });
@@ -1730,6 +1745,12 @@
       const h = await res.json();
       if (!h.ok || !Array.isArray(h.adapters)) { SERVER_OK = false; return; }
       SERVER_OK = true;
+      /* 服务端的 adapters 列表 = **真的实现了的数据源**。
+         记成集合，抽屉据此区分「配 key 就能用」和「配了也没用」。
+         踩过的坑：以前这里只回填 live，抽屉就把所有没配 key 的都写成
+         "未接入"，等于向用户承诺了一些后端压根没有的数据源。 */
+      HEALTH_IDS = new Set(h.adapters.map((a) => a.id));
+      HEALTH_LIMITS = (h.limits && typeof h.limits === 'object') ? h.limits : null;
       h.adapters.forEach((a) => {
         const t = ADAPTER_REGISTRY.find((x) => x.id === a.id);
         if (t) t.live = !!a.configured;
@@ -1739,6 +1760,18 @@
     } catch {
       SERVER_OK = false;
     }
+  }
+
+  /**
+   * 这个数据源当前版本到底实现了没有？
+   * - 有服务端：以 /api/health 为准（唯一事实来源）。
+   * - 纯前端：只能信目录里的 planned 标注（keys 在服务端，前端无论如何都配不了）。
+   * 返回 true / false / null（null = 现在还判断不了）。
+   */
+  function sourceImplemented(a) {
+    if (HEALTH_IDS) return HEALTH_IDS.has(a.id);
+    if (SERVER_OK === false) return !a.planned;
+    return null;
   }
 
   async function liveCompare(q) {
@@ -1910,10 +1943,17 @@
         return;
       }
       // 拿不到 → 摆手动入口。绝不填假数字。
+      /* 原因要分清楚，别一律说"未接入"：
+         - 纯前端模式：压根没有 /api/flights 可问，配不配密钥都无关；
+         - 有服务端但没配密钥：那才叫"未接入"，配上就能用。
+         把这两句混成一句，用户会以为自己配错东西了。 */
+      const reason = SERVER_OK === false
+        ? '当前是纯前端模式（没有服务端），机票实时报价需要一个跑起来的服务端'
+        : (flightsNote || lastLiveError || '机票实时报价未接入');
       box.innerHTML = `
         <div class="flights-na">
           <div class="flights-na-t">这条航线暂时拿不到实时报价</div>
-          <div class="flights-na-d">${esc(flightsNote || lastLiveError || '实时报价接口未接入')}
+          <div class="flights-na-d">${esc(reason)}
           —— 下面给你各平台的直查入口，点进去看的就是实时价。</div>
         </div>`;
       if (manual) manual.hidden = false;
@@ -2064,6 +2104,7 @@
     syncBasketCount();
     if (basketEl) basketEl.classList.add('open');
     if (basketMask) basketMask.classList.add('open');
+    focusInto(basketEl);                    // 锁住主内容（焦点随后交给输入框）
     // 等抽屉滑进来再聚焦，否则手机上键盘会弹在半路，动画会卡
     if (basketTa && basketTa.focus) setTimeout(() => { try { basketTa.focus(); } catch { /* 忽略 */ } }, 260);
   }
@@ -2071,6 +2112,7 @@
   function closeBasket() {
     if (basketEl) basketEl.classList.remove('open');
     if (basketMask) basketMask.classList.remove('open');
+    restoreFocus();
   }
 
   async function runBasket(items) {
@@ -2142,21 +2184,91 @@
   const drawer = $('#drawer');
   const mask   = $('#drawer-mask');
 
+  /* ---------- 抽屉的无障碍：inert + 焦点管理 ----------
+     为什么必须有：两个抽屉只是**视觉上**盖住了页面（靠 .open 加遮罩），
+     底层内容在无障碍树里依然可聚焦 —— 按 Tab 会走到被盖住的 chips 上，
+     键盘/读屏用户等于"点到了自己看不见的东西"。
+     用原生 inert 一句话锁住主内容，比手写 focus trap 更不容易漏。
+     另外：关抽屉时把焦点还给当初打开它的那个按钮，否则焦点会掉到 body，
+     键盘用户得从头 Tab 一遍。 */
+  const appRoot = document.querySelector('.app');
+  let drawerLastFocus = null;
+
+  /** 只要有抽屉开着，就锁住主内容。两个抽屉共用一个入口，避免各自漏判 */
+  function syncInert() {
+    const anyOpen = (drawer && drawer.classList.contains('open'))
+                 || (basketEl && basketEl.classList.contains('open'));
+    if (appRoot) appRoot.inert = !!anyOpen;
+  }
+
+  /** 打开抽屉的统一处理：记住来源焦点 → 锁住主内容 → 把焦点移进抽屉 */
+  function focusInto(el) {
+    drawerLastFocus = document.activeElement || null;
+    syncInert();
+    if (!el || !el.querySelector) return;
+    const first = el.querySelector('button, [href], input, textarea, select');
+    if (first && first.focus) { try { first.focus(); } catch { /* 忽略 */ } }
+  }
+
+  /** 关闭后解冻主内容，并把焦点还给触发元素（还在文档里才还） */
+  function restoreFocus() {
+    syncInert();
+    const el = drawerLastFocus;
+    drawerLastFocus = null;
+    if (!el || !el.focus) return;
+    try {
+      // 元素可能已被重渲染移除 —— 对已脱离文档的节点调 focus 没有意义
+      if (typeof document.contains !== 'function' || document.contains(el)) el.focus();
+    } catch { /* 忽略 */ }
+  }
+
+  /**
+   * 一个数据源在抽屉里该显示成什么。抽成纯函数是为了**能被测试直接打到** ——
+   * 否则只能去断言拼接后的 HTML 字符串，很容易写出一条"恒真"的假断言。
+   * 返回 { tag, ico, icoBg, tagCls, text }。
+   */
+  function adapterStatus(a) {
+    const impl = sourceImplemented(a);
+    if (a.live) {
+      return { tag: '已接入', ico: '✓', icoBg: '#12A150', tagCls: 'tag-ok',
+               text: '密钥已配置，比价会走这个平台' };
+    }
+    if (impl === false) {
+      return { tag: '规划中', ico: '·', icoBg: '#C6CDD8', tagCls: 'tag-mute',
+               text: '当前版本未实现，配了 key 也不会生效' };
+    }
+    if (impl === true) {
+      return { tag: '未接入', ico: '—', icoBg: '#98A2B3', tagCls: 'tag-mute',
+               text: '还没配密钥，配上就能用' };
+    }
+    return { tag: '未接入', ico: '?', icoBg: '#98A2B3', tagCls: 'tag-mute',
+             text: '需服务端才能接入（当前是纯前端模式）' };
+  }
+
   function renderDrawer() {
     const live = ADAPTER_REGISTRY.filter((a) => a.live).length;
+    const plannedCount = ADAPTER_REGISTRY.filter((a) => sourceImplemented(a) === false).length;
 
-    const rows = ADAPTER_REGISTRY.map((a) => `
+    /* 三态，而不是"接入/未接入"两态。
+       以前所有没配 key 的都写"未接入 · 配 XXX"，等于向用户承诺
+       「配上就能用」—— 可 haodanku / meituan / ctrip 后端压根没有 adapter，
+       配了也是白配。这是**会让人白花时间**的那种谎，必须分开说。 */
+    const rows = ADAPTER_REGISTRY.map((a) => {
+      const s = adapterStatus(a);
+      return `
       <div class="plat-row">
-        <div class="pf" style="background:${a.live ? '#12A150' : '#98A2B3'}">${a.live ? '✓' : '—'}</div>
+        <div class="pf" style="background:${s.icoBg}">${s.ico}</div>
         <div class="row-main">
           <div class="row-name">${esc(a.name)}</div>
           <div class="row-desc">${esc(a.scope)} · ${esc(a.person)}</div>
           <div class="row-desc mono">${esc(a.env)}</div>
+          <div class="row-desc">${esc(s.text)}</div>
         </div>
         <div class="row-right">
-          <span class="tag ${a.live ? 'tag-ok' : 'tag-mute'}">${a.live ? '已接入' : '未接入'}</span>
+          <span class="tag ${s.tagCls}">${s.tag}</span>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
 
     const serverLine = SERVER_OK === true
       ? '<span class="tag tag-ok">服务端已连接</span>'
@@ -2245,7 +2357,8 @@
       ${watchBlock}
       ${syncBlock}
       ${metricsBlock}
-      ${rows}`;
+      ${rows}
+      ${plannedCount ? `<div class="fine" style="margin-top:10px">标着「规划中」的 ${plannedCount} 个，当前版本后端还没有对应实现 —— 现在配 key 也不会生效，别白折腾。等实现了我会在这里改成「未接入 · 配上就能用」。</div>` : ''}`;
   }
 
   let METRICS = null;
@@ -2269,9 +2382,13 @@
   function openDrawer()  {
     renderDrawer();
     drawer.classList.add('open'); mask.classList.add('open');
+    focusInto(drawer);                      // 锁住主内容 + 焦点移进抽屉
     if (SERVER_OK === true) loadMetrics(); // 异步到了再刷新抽屉
   }
-  function closeDrawer() { drawer.classList.remove('open'); mask.classList.remove('open'); }
+  function closeDrawer() {
+    drawer.classList.remove('open'); mask.classList.remove('open');
+    restoreFocus();
+  }
 
   if ($('#btn-status')) $('#btn-status').addEventListener('click', openDrawer);
   if ($('#btn-close')) $('#btn-close').addEventListener('click', closeDrawer);
@@ -2433,6 +2550,11 @@
     parseIntent, parseDate, findCities, extractProduct, isMeaningfulProduct,
     renderShop, renderShopLive, renderFood, renderRoute,
     renderFlightTable, humanMin2,
+    // 抽屉三态与无障碍：暴露出来是为了能被断言打到，而不是靠读代码相信
+    adapterStatus, sourceImplemented, fmtHumanY,
+    adapterEntry: (id) => ADAPTER_REGISTRY.find((x) => x.id === id) || null,
+    adapterCatalog: () => ADAPTER_REGISTRY,
+    openDrawer, closeDrawer, openBasket, closeBasket,
     greatCircle, estimateModes, humanHours, modeVerdict, CITY_GEO,
     probeHealth, liveCompare,
     spark, demoLive, renderBasket, renderBasketOffline, renderError,

@@ -26,6 +26,13 @@
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
+/* 「麻烦门槛」默认 10 元：省下的钱低于它，就建议用户图省事别折腾。
+   2026-10-05 之前这里写死成 `opts.saveThreshold == null ? 10 : ...`，
+   但服务端调用点把「没传 th 参数」错误地转成了 0（Number(null) === 0），
+   于是这个默认值**从未生效**，卡片上一直显示「麻烦门槛 ¥0」。
+   现在把默认值提出来做**唯一来源**，/api/health 也报它 —— 一处改全处对。 */
+const DEFAULT_THRESHOLD = 10;
+
 /**
  * @param {Array} items 每件商品在各平台的最低价
  *   [{ q:'猫粮', byPlatform:{ jd:89, pdd:79 }, names:{ jd:'京东', pdd:'拼多多' } }]
@@ -34,7 +41,7 @@ const round2 = (n) => Math.round(n * 100) / 100;
  * @returns {Object} 两个方案 + 一句能直接展示给人看的建议
  */
 function computeBasket(items, opts = {}) {
-  const threshold = opts.saveThreshold == null ? 10 : Number(opts.saveThreshold);
+  const threshold = opts.saveThreshold == null ? DEFAULT_THRESHOLD : Number(opts.saveThreshold);
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
 
   /* ---- 1. 逐件商品找最优 ---- */
@@ -203,4 +210,4 @@ function buildNotes(pricedCount, threshold, savingVsWorstSingle) {
   return notes;
 }
 
-module.exports = { computeBasket, round2 };
+module.exports = { computeBasket, round2, DEFAULT_THRESHOLD };
