@@ -468,6 +468,150 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
     proc2.kill();
   }
 
+  /* ==========================================================================
+     8. 上线资产：页面上引用的东西，必须存在、尺寸对、而且**真的会被发布**
+     --------------------------------------------------------------------------
+     这一节是被两类"静默失败"逼出来的：
+
+       · iOS 不认 SVG 图标 —— 把 icon.svg 写成 apple-touch-icon，
+         结果是主屏一个灰方块，而且图标加载失败**不会有任何可见报错**；
+       · GitHub Pages 的归集是一份**白名单**，新增资源漏加进来 = 线上 404，
+         而页面照样 200、照样能用，只有打开控制台才知道图没了。
+
+     所以这里既查"文件在不在、尺寸对不对"，也查"发布白名单收没收录"。
+     尺寸不是看声明（声明是我自己写的，写错了它当然说对），是**读 PNG 的 IHDR**。
+     ========================================================================== */
+  say('\n— 上线资产：存在 / 尺寸 / 会被发布 —');
+
+  const ROOT_DIR = path.join(__dirname, '..');
+  const readPng = (file) => {
+    const b = fs.readFileSync(file);
+    const sigOk = b.length > 26 &&
+      b.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    return {
+      sigOk,
+      w: sigOk ? b.readUInt32BE(16) : 0,
+      h: sigOk ? b.readUInt32BE(20) : 0,
+      colorType: sigOk ? b[25] : -1,
+      bytes: b.length
+    };
+  };
+
+  const indexHtml = fs.readFileSync(path.join(ROOT_DIR, 'index.html'), 'utf8');
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'manifest.json'), 'utf8'));
+  const dIcons = manifest.icons || [];
+
+  let iconMissing = 0;
+  let iconSizeBad = 0;
+  for (const ic of dIcons) {
+    const f = path.join(ROOT_DIR, ic.src);
+    if (!fs.existsSync(f)) { iconMissing++; say('    缺文件：' + ic.src); continue; }
+    if (!ic.src.endsWith('.png')) continue;          // SVG 的尺寸是 any，不参与比对
+    const m = /^(\d+)x(\d+)$/.exec(ic.sizes || '');
+    const info = readPng(f);
+    if (!m || !info.sigOk || info.w !== Number(m[1]) || info.h !== Number(m[2])) {
+      iconSizeBad++;
+      say('    尺寸对不上：' + ic.src + ' 声明 ' + ic.sizes + '，实际 ' + info.w + '×' + info.h);
+    }
+  }
+  check(dIcons.length > 0 && iconMissing === 0,
+    'manifest 里每个图标文件都在磁盘上（共 ' + dIcons.length + ' 个）');
+  check(iconSizeBad === 0, 'PNG 图标的真实尺寸与声明的 sizes 一致（拿别的尺寸凑数会被抓）');
+
+  check(!dIcons.some((i) => /any\s+maskable/.test(i.purpose || '')),
+    'purpose 拆开了，没有「any maskable」一图两用（圆角图当 maskable 会被系统裁出透明角）');
+  check(dIcons.some((i) => i.purpose === 'maskable'),
+    '有一个专门的 maskable 图标（Android 自适应图标必须的）');
+  check(dIcons.some((i) => i.sizes === '192x192' && i.type === 'image/png'),
+    '有 192×192 的 PNG（Android 主屏图标的最小可用尺寸）');
+
+  const atiTag = /<link[^>]+rel="apple-touch-icon"[^>]*>/.exec(indexHtml);
+  check(!!atiTag, '声明了 apple-touch-icon');
+  check(!!atiTag && /href="[^"]+\.png"/.test(atiTag[0]),
+    'apple-touch-icon 指向 PNG —— iOS 不支持 SVG，指 SVG 的话主屏就是个灰方块');
+
+  // 取某个 meta 的 content。带冒号的键要转义，否则 'og:image' 会撞上 'og:image:width'
+  const metaOf = (key) => {
+    const m = new RegExp('<meta[^>]+(?:property|name)="' + key.replace(/[:.]/g, '\\$&') + '"[^>]*>', 'i')
+      .exec(indexHtml);
+    if (!m) return null;
+    const c = /content="([^"]*)"/.exec(m[0]);
+    return c ? c[1] : null;
+  };
+
+  const ogImage = metaOf('og:image') || '';
+  check(/^https:\/\//.test(ogImage),
+    'og:image 是绝对的 https URL（相对路径爬虫解析不了 —— 微信/FB/Twitter 一致不认）');
+
+  let ogBase = '';
+  try { ogBase = path.basename(new URL(ogImage).pathname); } catch { ogBase = ''; }
+  check(!!ogBase && fs.existsSync(path.join(ROOT_DIR, ogBase)),
+    'og:image 指向的文件本地就有（' + (ogBase || '解析不出文件名') + '）—— 线上才有得抓');
+
+  if (ogBase && fs.existsSync(path.join(ROOT_DIR, ogBase))) {
+    const info = readPng(path.join(ROOT_DIR, ogBase));
+    check(info.w === 1200 && info.h === 630,
+      '分享图确实是 1200×630（实测 ' + info.w + '×' + info.h + '）—— 1.91:1 才不会被裁掉标题');
+    check(info.bytes < 1024 * 1024,
+      '分享图小于 1MB（' + Math.round(info.bytes / 1024) + ' KB），爬虫抓得动');
+    check(String(info.w) === String(metaOf('og:image:width')) &&
+          String(info.h) === String(metaOf('og:image:height')),
+      'og:image:width/height 与真实尺寸一致（写错客户端会先把卡片框画错）');
+    check(metaOf('og:image:alt') !== null, 'og:image 带 alt（读屏与抓取失败时都要用）');
+    try {
+      check(new URL(ogImage).origin === new URL(metaOf('og:url')).origin,
+        'og:image 与 og:url 同源（分散在两个站上的话，挂一个就掉图）');
+    } catch { check(false, 'og:image / og:url 不是合法 URL，解析失败'); }
+  }
+  check(metaOf('og:url') !== null,
+    '有 og:url（不然每条 ?q= 分享链接各算一个卡片、各存一份缓存）');
+  check(metaOf('twitter:card') === 'summary_large_image',
+    'twitter:card=summary_large_image（不写的话 X 会把大图裁成小方图）');
+  check(/<link[^>]+rel="canonical"/.test(indexHtml), '有 canonical');
+
+  /* 引用 → 发布：这是本节最值钱的一条。
+     白名单漏一个文件，线上就是静默 404；页面对此毫无感知。 */
+  const wf = fs.readFileSync(path.join(ROOT_DIR, '.github', 'workflows', 'pages.yml'), 'utf8');
+  const published = new Set();
+  for (const line of wf.replace(/\\\r?\n\s*/g, ' ').split(/\r?\n/)) {
+    const m = /^\s*cp\s+(.+)$/.exec(line);
+    if (!m) continue;
+    const parts = m[1].trim().split(/\s+/);
+    parts.pop();                                   // 最后一个是目标目录 publish/
+    parts.forEach((p) => published.add(p.replace(/^\.\//, '')));
+  }
+  check(published.size > 0, '能解析出 Pages 的归集白名单（' + published.size + ' 个文件）');
+
+  const localRefs = new Set();
+  const refRe = /(?:href|src)\s*=\s*"([^"]+)"/g;
+  let rm;
+  while ((rm = refRe.exec(indexHtml))) {
+    const u = rm[1];
+    if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(u) || u.startsWith('data:') || u.startsWith('#')) continue;
+    localRefs.add(u.replace(/^\.\//, ''));
+  }
+  dIcons.forEach((i) => localRefs.add(i.src));
+  localRefs.add('sw.js');   // 注册写在行内 JS 的字符串里，href/src 抓不到，手工补上
+
+  const notPub = [...localRefs].filter((f) => !published.has(f));
+  check(notPub.length === 0,
+    'index.html / manifest 引用的本地文件全在发布白名单里' +
+    (notPub.length ? '，漏了：' + notPub.join(', ') : ''));
+  check(published.has('og-image.png'), '分享图在发布白名单里（漏了的话卡片永远没图）');
+  check(published.has('apple-touch-icon.png'), 'apple-touch-icon 在发布白名单里');
+
+  /* SW 的预缓存清单同理：写错了在线看不出来，一断网才暴露 */
+  const swSrc = fs.readFileSync(path.join(ROOT_DIR, 'sw.js'), 'utf8');
+  const shellBlock = /const SHELL\s*=\s*\[([\s\S]*?)\]/.exec(swSrc);
+  const shell = shellBlock
+    ? (shellBlock[1].match(/'(\.\/[^']*)'/g) || []).map((s) => s.slice(1, -1).replace(/^\.\//, ''))
+    : [];
+  check(shell.length >= 5, '能解析出 SW 预缓存清单（' + shell.length + ' 项）');
+  const shellMissing = shell.filter((f) => f !== '' && !fs.existsSync(path.join(ROOT_DIR, f)));
+  check(shellMissing.length === 0,
+    'SW 预缓存清单里的文件都在磁盘上' + (shellMissing.length ? '，缺：' + shellMissing.join(', ') : ''));
+  check(published.has('sw.js'), 'Service Worker 本身在发布白名单里（漏了 → 装不到桌面）');
+
   say('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
   fs.writeFileSync(path.join(__dirname, '..', 'test-quality-out.txt'), LOG.join('\n'), 'utf8');
   process.exit(fail ? 1 : 0);

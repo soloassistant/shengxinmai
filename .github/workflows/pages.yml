@@ -32,10 +32,22 @@ jobs:
 
       # 只发布前端运行真正需要的文件：server/ 里有适配器逻辑和密钥模板，
       # .data/ 是价格历史库，.github/ 是 CI 本身，都不该暴露在 Pages 上。
+      #
+      # ⚠ 这是一份**白名单**，不是"排除几个目录"。新增前端资源（图标、分享图…）
+      #   必须同时加到这里，否则新文件不会上传：index.html 照样 200，
+      #   但 PNG 全部 404，而且浏览器对图标的失败是静默的 —— 只有看控制台才发现。
       - name: 归集要发布的静态文件
         run: |
           mkdir -p publish
-          cp index.html app.js data.js styles.css sw.js manifest.json icon.svg .nojekyll publish/
+          cp index.html app.js data.js styles.css sw.js manifest.json .nojekyll publish/
+          cp icon.svg favicon-32.png icon-192.png icon-512.png icon-maskable-512.png publish/
+          cp apple-touch-icon.png og-image.png publish/
+          # 白名单漏了文件就在这儿失败，别等线上默默 404
+          for f in index.html app.js data.js styles.css sw.js manifest.json icon.svg \
+                   favicon-32.png icon-192.png icon-512.png icon-maskable-512.png \
+                   apple-touch-icon.png og-image.png; do
+            test -s "publish/$f" || { echo "::error::publish/$f 没归集到（白名单漏了？）"; exit 1; }
+          done
           ls -la publish/
 
       - name: 上传静态文件

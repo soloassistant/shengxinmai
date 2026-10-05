@@ -6,11 +6,34 @@
 <title>省心买 · AI 比价与出行助手</title>
 
 <!-- 分享到微信 / QQ 时的链接预览卡片内容。这是网页相对小程序的天然优势：
-     链接可以被任意转发、被搜索引擎收录，不需要企业主体的分享模板。 -->
+     链接可以被任意转发、被搜索引擎收录，不需要企业主体的分享模板。
+
+     ⚠ og:image / og:url 必须是**绝对 URL**。这一条踩过：社交平台的爬虫不跑浏览器、
+     没有 base URL 的概念，写 ./og-image.png 会解析到爬虫自己的域名上，直接抓不到图
+     （多个来源一致确认：相对路径在微信/Facebook/Twitter 全部失效）。
+     代价就是得钉一个域名 —— 而本项目是两套部署，且 shareUrl() 一直刻意不写死域名。
+     这里钉 GitHub Pages：它是 README 里的「在线版」，也是两套里**耐久**的那套
+     （另一个是沙箱部署，被回收的话所有已经发出去的分享卡片都会掉图）。
+     分享带服务端的那个地址一样能出卡片，只是缩略图从这边取 —— 同一个文件。 -->
 <meta name="description" content="说一句人话，横向拉平各平台到手价；一份清单算清该分几家买。不代下单、不代支付。">
 <meta property="og:title" content="省心买 · AI 比价与出行助手">
 <meta property="og:description" content="贴一句商品名，横向拉平各平台到手价。把比价链接发给朋友，打开就自动比。">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="省心买">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:url" content="https://soloassistant.github.io/shengxinmai/">
+<meta property="og:image" content="https://soloassistant.github.io/shengxinmai/og-image.png">
+<!-- 宽高和 alt 一起给：Discord / Slack 拿到尺寸就能先把卡片框画出来；
+     alt 是给读屏和抓不到的降级用的。 -->
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="省心买 —— 说一句人话，我把该比的都给你比了">
+<!-- 不给 twitter:card 的话，X/推特会把 1200×630 裁成一个小方图 -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="省心买 · AI 比价与出行助手">
+<meta name="twitter:description" content="贴一句商品名，横向拉平各平台到手价。把比价链接发给朋友，打开就自动比。">
+<meta name="twitter:image" content="https://soloassistant.github.io/shengxinmai/og-image.png">
+<link rel="canonical" href="https://soloassistant.github.io/shengxinmai/">
 
 <!-- 主题色跟随明暗，让手机浏览器地址栏不再在深色模式下刺眼。
      用单个 meta + JS 更新，而不是两个带 media 的 meta：
@@ -18,8 +41,12 @@
 <meta name="theme-color" id="theme-color" content="#F5F6F8">
 
 <link rel="manifest" href="manifest.json">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icon.svg">
+<!-- apple-touch-icon 只给 PNG：iOS **不支持** SVG 图标，写 icon.svg 等于没有图标，
+     加到主屏会得到一个灰方块。Apple 会自己套圆角，所以给的是一张满幅方角图
+     （给圆角图会变成"圆角套圆角"，四角露出底色），文件也不带透明通道。 -->
+<link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="省心买">
 <link rel="stylesheet" href="styles.css">

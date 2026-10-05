@@ -1139,6 +1139,8 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
       { id: 'ignav', name: '机票实时报价', configured: false, implemented: true, envKeys: ['IGNAV_API_KEY'] },
     ],
     limits: { basketThreshold: 10, basketMaxItems: 8 },
+    version: '0.2.0',
+    buildId: 'abcdef123456',
   };
   const healthStub = async (url) => {
     const u = String(url);
@@ -1271,6 +1273,36 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
     thEl.textContent + '/' + mxEl.textContent + '）');
   chk(SXM.basketMax === 8,
     '回落时校验阈值也跟着回到 8（不能"文案显示 8、校验还用上一轮的 5"），实际 ' + SXM.basketMax);
+
+  /* ==========================================================================
+     版本标识：抽屉要真的能把"线上是哪一版"报出来（审计 L4）
+     --------------------------------------------------------------------------
+     两套部署 + 一个要手动重发，"我到底发出去了没有"会反复出现。
+     断言分两半：状态记住了，**并且真的渲染进了 DOM**。
+     只断言状态是没用的 —— 值躺在变量里不显示，等于没做这个功能。
+     ========================================================================== */
+  say('\n— 版本标识：抽屉里报得出构建 —');
+
+  sandbox.fetch = healthStub;                 // 这次要的是带 version/buildId 的完整响应
+  await SXM.probeHealth();
+  chk(SXM.build && SXM.build.version === '0.2.0' && SXM.build.buildId === 'abcdef123456',
+    '探测成功后记下了服务端报的 version/buildId，实际 ' + JSON.stringify(SXM.build));
+
+  const drawerHtml = sandbox.document.getElementById('drawer-body').innerHTML;
+  chk(drawerHtml.indexOf('abcdef123456') !== -1,
+    '构建指纹真的渲染进了抽屉（不是只躺在变量里）');
+  chk(drawerHtml.indexOf('0.2.0') !== -1, '版本号也渲染进了抽屉');
+
+  /* 老版本部署没报这两个字段 → 不编、也不摆一行空占位。
+     "拿不到就什么都不显示"比"显示 服务端 — 构建 —"诚实。 */
+  sandbox.fetch = limitsFetch(null);
+  await SXM.probeHealth();
+  chk(SXM.build === null, '服务端没报 version/buildId 时 build 为 null —— 绝不编一个版本号出来');
+  const drawerHtml2 = sandbox.document.getElementById('drawer-body').innerHTML;
+  chk(drawerHtml2.indexOf('构建') === -1,
+    '拿不到构建标识时抽屉里不摆占位行（"构建"二字只在真的有值时才出现）');
+  chk(SXM.build === null && drawerHtml2.indexOf('undefined') === -1,
+    '状态为空时界面也不会漏出 undefined');
 
   /* ==========================================================================
      离线清单：降级不该比比价卡少给入口（审计 L2）

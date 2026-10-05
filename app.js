@@ -1740,6 +1740,10 @@
   /* 服务端权威的「已实现数据源」集合。null = 还没探测到（纯前端模式）。 */
   let HEALTH_IDS = null;
   let HEALTH_LIMITS = null;
+  /* 服务端报回来的构建标识 { version, buildId }。
+     只有在真的问到了服务端时才非空 —— 拿不到就什么都不显示，
+     编一个版本号比不显示更糟（用户会拿着假版本号来对问题）。 */
+  let BUILD = null;
 
   /* 「慢」和「没有」是两件事，必须分开（2026-10-05 外部审计指出，实测确认更严重）。
      踩过的坑：原来只要 fetch 抛异常就一律 SERVER_OK = false，而 4s 超时在
@@ -1779,6 +1783,12 @@
          "未接入"，等于向用户承诺了一些后端压根没有的数据源。 */
       HEALTH_IDS = new Set(h.adapters.map((a) => a.id));
       HEALTH_LIMITS = (h.limits && typeof h.limits === 'object') ? h.limits : null;
+      /* 构建标识：服务端算的**前端内容指纹**。
+         两套部署 + 手动重发，光看页面分不出新旧（功能都在，只是旧的），
+         这个值是"线上到底是哪一版"最硬的证据。拿不到就不显示。 */
+      BUILD = (h.version || h.buildId)
+        ? { version: h.version || null, buildId: h.buildId || null }
+        : null;
       applyLimits();                    // 门槛/上限的数字以服务端为准，别再硬编码两份
       h.adapters.forEach((a) => {
         const t = ADAPTER_REGISTRY.find((x) => x.id === a.id);
@@ -2418,6 +2428,12 @@
         <div class="fine" style="margin-top:9px">「自动」跟随系统。首帧就已经是正确颜色，不会白屏闪一下。</div>
       </div>`;
 
+    /* 版本标识放最底下、最小号：它是给"排查线上是哪一版"用的，不是给日常用户看的。
+       只有真问到服务端才显示 —— 纯前端模式下没有构建标识可报，就不摆一行占位。 */
+    const buildBlock = BUILD
+      ? `<div class="fine mono" style="margin-top:14px">服务端 ${esc(BUILD.version || '—')}　构建 ${esc(BUILD.buildId || '—')}</div>`
+      : '';
+
     $('#drawer-body').innerHTML = `
       <div class="banner banner-${live ? 'info' : 'warn'}">
         <span class="banner-ico">${live ? 'i' : '!'}</span>
@@ -2438,7 +2454,8 @@
       ${syncBlock}
       ${metricsBlock}
       ${rows}
-      ${plannedCount ? `<div class="fine" style="margin-top:10px">标着「规划中」的 ${plannedCount} 个，当前版本后端还没有对应实现 —— 现在配 key 也不会生效，别白折腾。等实现了我会在这里改成「未接入 · 配上就能用」。</div>` : ''}`;
+      ${plannedCount ? `<div class="fine" style="margin-top:10px">标着「规划中」的 ${plannedCount} 个，当前版本后端还没有对应实现 —— 现在配 key 也不会生效，别白折腾。等实现了我会在这里改成「未接入 · 配上就能用」。</div>` : ''}
+      ${buildBlock}`;
   }
 
   let METRICS = null;
@@ -2664,6 +2681,7 @@
     get _probeInFlight() { return !!probePromise; },
     get basketMax() { return BASKET_MAX; },
     applyLimits,
+    get build() { return BUILD; },
     get lastError() { return lastLiveError; },
     setDemo(v) { DEMO_MODE = !!v; renderDrawer(); },
     setAdapters(list) {

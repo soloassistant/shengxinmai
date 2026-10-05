@@ -452,6 +452,25 @@ say('\n— 聚合并发 —');
       check(healthAll.limits && healthAll.limits.basketThreshold === 10,
         '/api/health 报出了 basketThreshold=10，前端不用自己兜底一个可能打架的数');
 
+      /* ---- 构建标识：回答"线上跑的到底是哪一版" ----
+         两个线上地址是两套部署、其中一个要手动重发，所以"我到底发出去了没有"
+         会反复出现。这个值是唯一能当场断案的证据，必须有断言钉住它**真的是**
+         app.js 的内容哈希 —— 否则哪天被改成 mtime 或写死的字符串，
+         它就会变成一个"看着像证据"的摆设。 */
+      const pkgNow = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+      const appBytes = fs.readFileSync(path.join(__dirname, '..', 'app.js'));
+      const wantBuild = crypto.createHash('sha1').update(appBytes).digest('hex').slice(0, 12);
+
+      check(healthAll.version === pkgNow.version,
+        '/api/health 报的 version 就是 package.json 的 ' + pkgNow.version);
+      check(healthAll.buildId === wantBuild,
+        '/api/health 的 buildId 就是 app.js 的内容哈希（' + wantBuild + '），换 mtime 会发假版本');
+      check(typeof healthAll.buildId === 'string' && healthAll.buildId.length === 12,
+        'buildId 是定长的短指纹，能直接念给人听（' + healthAll.buildId + '）');
+      // 换一个字节就得换一个指纹，否则"能对出版本"是假的
+      check(crypto.createHash('sha1').update(Buffer.concat([appBytes, Buffer.from('x')])).digest('hex').slice(0, 12) !== wantBuild,
+        'app.js 差一个字节，buildId 就会不同（指纹是真的，不是摆设）');
+
       /* ---- 防漂移：前端目录（data.js）↔ 服务端事实（/api/health）双向核对 ----
          这是本次修复的**核心保险**：只要有人在 data.js 里加一个"已实现"的数据源
          却没写 adapter，或者写了 adapter 却忘了登记，这条断言立刻变红。

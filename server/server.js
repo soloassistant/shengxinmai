@@ -58,6 +58,39 @@ const ROOT = path.resolve(__dirname, '..');          // 项目根 = 静态文件
 const DATA_DIR   = process.env.SXM_DATA_DIR || path.join(ROOT, '.data');
 const PRICE_FILE = path.join(DATA_DIR, 'prices.jsonl');
 
+/* ---------- 构建标识：用来回答"线上跑的到底是哪一版" ----------
+   两个线上地址是两套独立部署，而 workbuddy host 要手动重发 ——
+   于是"我到底发出去了没有"会反复出现，光看页面看不出来（功能都在，就是旧的）。
+
+   为什么用 app.js 的**内容指纹**，而不是 commit sha 或文件时间：
+     · 发布沙箱里没有 .git，拿不到 sha；
+     · mtime 会骗人 —— 发布工具重传时可能把 mtime 一起带过去（跟 ETag 那条同一个坑），
+       "内容换了、时间戳没变"是最难查的一种。
+   sha1 严格等于"前端是哪一份"，重传多少次都不变，改一个字节就变。 */
+const PKG = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')); }
+  catch { return {}; }
+})();
+const APP_JS = path.join(ROOT, 'app.js');
+
+/* 用 size+mtime 只当**缓存键**（便宜），身份仍然是内容 sha1。
+   这样即使运行中有人覆盖了 app.js，报出来的也是当下磁盘上那份的指纹，
+   不会出现"发的文件是新的、报的版本是旧的"。 */
+let _buildIdCache = { key: '', id: null };
+function buildId() {
+  try {
+    const st = fs.statSync(APP_JS);
+    const key = st.size + ':' + st.mtimeMs;
+    if (_buildIdCache.key !== key) {
+      _buildIdCache = {
+        key,
+        id: crypto.createHash('sha1').update(fs.readFileSync(APP_JS)).digest('hex').slice(0, 12)
+      };
+    }
+    return _buildIdCache.id;
+  } catch { return null; }
+}
+
 const CACHE_TTL = Number(process.env.SXM_CACHE_TTL_MS) || 60000;
 const RL_BURST  = Number(process.env.SXM_RL_BURST) || 60;
 const RL_RATE   = Number(process.env.SXM_RL_RATE) || 1;
@@ -318,6 +351,9 @@ async function api(req, res, p, url, rid) {
     const all = list.concat([flight]);
     return json(res, 200, {
       ok: true,
+      // 版本标识：诊断"线上是哪一版"只看这两个值就够了，不用再去比字节数
+      version: PKG.version || null,
+      buildId: buildId(),
       configuredCount: all.filter((x) => x.configured).length,
       adapters: all,
       limits: {
@@ -558,6 +594,8 @@ server.listen(PORT, () => {
   });
 
   const s = store.stats();
+  // 启动横幅也打一份构建标识：和 /api/health 报的对一眼就知道是不是同一份
+  process.stdout.write('  版本：' + (PKG.version || '—') + '　构建：' + (buildId() || '—') + '\n');
   process.stdout.write('\n  接口：/api/compare  /api/basket  /api/history  /api/health  /api/metrics\n');
   process.stdout.write('  价格历史：' + (s.file || '（未落盘）') + '  已采 ' + s.points + ' 条 / ' + s.skus + ' 个商品\n');
   process.stdout.write('  限流：突发 ' + RL_BURST + ' 次、' + RL_RATE + ' 次每秒　缓存：' + (CACHE_TTL / 1000) + ' 秒\n\n');
