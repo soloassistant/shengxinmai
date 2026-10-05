@@ -389,6 +389,42 @@ say('\n— 聚合并发 —');
       check(traversal.status === 403 || traversal.status === 404,
         '路径穿越被挡住（返回 ' + traversal.status + '）');
 
+      /* ---- 静态资源的 ETag / 304 ----
+         serveStatic 的注释一直写着「保留 304 协商，命中时不需要重传体积」，
+         但响应里既没有 ETag 也没有 Last-Modified —— 浏览器没有校验子可带，
+         304 永远不会发生，每次访问都把 app.js + styles.css + data.js 全量重传。
+         这是 2026-10-05 在线上响应头里实测出来的（CloudStudio 网关回的也是裸 no-cache）。
+         下面这几条就是盯着「注释承诺过、代码没做到」的那件事。 */
+      const r1 = await fetch(base + '/app.js');
+      const etag = r1.headers.get('etag');
+      const cc = r1.headers.get('cache-control') || '';
+      check(r1.status === 200 && !!etag, '静态资源带 ETag（没有它 304 无从谈起）');
+      check(cc.includes('no-cache'), '仍然是 no-cache：发布后必须能立刻拿到新版本');
+
+      /* ETag 必须是**内容**哈希。要是哪天有人图省事改成 mtime+size，
+         发布时 mtime 被一起带过去、内容变了而字节数恰好没变，
+         就会算出同一个 ETag 发假 304 —— 那是「改了没生效」里最难查的一种。 */
+      const appBuf = fs.readFileSync(path.join(__dirname, '..', 'app.js'));
+      const wantEtag = '"' + crypto.createHash('sha1').update(appBuf).digest('hex').slice(0, 32) + '"';
+      check(etag === wantEtag, 'ETag 就是 app.js 的内容哈希（换成 mtime+size 会发假 304）');
+
+      const r2 = await fetch(base + '/app.js', { headers: { 'If-None-Match': etag } });
+      check(r2.status === 304, '带对得上的 If-None-Match 回 304');
+      check((await r2.text()) === '', '304 不带 body —— 这才叫「不重传体积」');
+
+      const r3 = await fetch(base + '/app.js', { headers: { 'If-None-Match': '"nope"' } });
+      check(r3.status === 200, 'If-None-Match 对不上时老实回 200 全量，不能糊弄');
+
+      const r4 = await fetch(base + '/app.js', { headers: { 'If-None-Match': 'W/' + etag } });
+      check(r4.status === 304, '容忍弱校验写法 W/"..."（中间代理会这么改写）');
+
+      const r5 = await fetch(base + '/styles.css');
+      check(!!r5.headers.get('etag') && r5.headers.get('etag') !== etag,
+        '不同文件 ETag 不同（不是拿文件名或时间糊出来的）');
+
+      const r6 = await fetch(base + '/');
+      check(!!r6.headers.get('etag'), 'index.html 也带 ETag');
+
       /* ---- 机票接口：没密钥时必须如实说，且绝不能给假价格 ---- */
       const fl = await (await fetch(base + '/api/flights?from=BJS&to=SHA&date=2026-10-20')).json();
       check(fl.ok === true, '/api/flights 无密钥时仍返回 200 与完整结构');

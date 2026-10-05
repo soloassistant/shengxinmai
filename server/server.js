@@ -33,6 +33,7 @@
 const http = require('node:http');
 const fs   = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const { compare, status } = require('./adapters');
 const flightAdapter = require('./adapters/ignav');
@@ -137,6 +138,16 @@ function clientIp(req) {
 }
 
 /* ---------- 静态文件 ---------- */
+
+/* ETag 用**内容哈希**强校验，不用 nginx 那套 mtime+size 的弱校验。
+   为什么（2026-10-05 实测）：发布工具重传文件时可能把 mtime 一起带过去，
+   于是「内容改了、字节数恰好没变」会算出同一个 ETag，浏览器此后一直吃 304
+   拿到旧文件 —— 属于最难查的一类「改了没生效」。内容哈希没有这个洞。
+   最大的文件就 120KB 上下，sha1 的开销可以忽略（比省下的重传便宜太多）。 */
+function etagOf(buf) {
+  return '"' + crypto.createHash('sha1').update(buf).digest('hex').slice(0, 32) + '"';
+}
+
 function serveStatic(req, res, urlPath) {
   const rel = decodeURIComponent(urlPath === '/' ? '/index.html' : urlPath);
   const file = path.resolve(ROOT, '.' + rel);
@@ -160,13 +171,36 @@ function serveStatic(req, res, urlPath) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found');
       return;
     }
-    res.writeHead(200, {
-      'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
-      // 一律 no-cache：Service Worker 和静态资源都要能被下一次发布刷新，
-      // 但保留 304 协商，命中时不需要重传体积
-      'Cache-Control': 'no-cache'
+    fs.readFile(file, (readErr, buf) => {
+      if (readErr) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found');
+        return;
+      }
+      const etag = etagOf(buf);
+      const inm = req.headers['if-none-match'];
+      // 允许客户端带多个候选，也容忍它按弱校验的写法加上 W/
+      const matched = !!inm && inm.split(',').some((t) => {
+        const v = t.trim();
+        return v === etag || v === 'W/' + etag;
+      });
+
+      const headers = {
+        'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+        /* no-cache 的意思是「每次都必须回服务端核对」，不是「不许缓存」。
+           核对靠 ETag：命中就 304，连接上只走几百字节的头，不重传体积。 */
+        'Cache-Control': 'no-cache',
+        'ETag': etag,
+        'Last-Modified': st.mtime.toUTCString()
+      };
+
+      if (matched) {
+        // 304 不带 body、也不带 Content-Length（Node 对 304 会自行抑制 body）
+        res.writeHead(304, headers).end();
+        return;
+      }
+      headers['Content-Length'] = buf.length;
+      res.writeHead(200, headers).end(buf);
     });
-    fs.createReadStream(file).pipe(res);
   });
 }
 
