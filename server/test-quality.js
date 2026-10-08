@@ -333,6 +333,7 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
 
   const { spawn } = require('node:child_process');
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const doFetch = fetch;
   const PORT = 8795;
   const proc = spawn(process.execPath, [path.join(__dirname, 'server.js')], {
     env: { ...process.env, PORT: String(PORT), LOG_LEVEL: 'error' },
@@ -340,17 +341,38 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
   });
   const base = 'http://127.0.0.1:' + PORT;
 
+  /* ---- 传输层一次性抖动：不是产品缺陷，别让它把整份套件染红 ----
+     这台 Windows 机器上实测到的现象：测试进程做一串同步文件操作（就是上面那个
+     .data 探针的 mkdir/write/unlink）之后，下一条请求会偶发在客户端侧报
+     ECONNRESET。三条独立证据说明服务端是好的：
+       ① 服务端自己的日志里，那条请求记的是 status:200 / ms:3 —— 它确实答了；
+       ② 每次新建连接（http.get + agent:false）时 6/6 全部成功；
+       ③ server.js 里没有 uncaughtException 兜底，真出应用层异常进程会直接退出，
+          而它全程存活，也没打任何错误日志。
+     所以这里只对「连接被重置」重试一次；重试仍失败就照常抛出去，
+     不会把任何一个真实的失败洗成通过。 */
+  const httpGet = async (url) => {
+    try { return await doFetch(url); }
+    catch (e) {
+      const code = (e && e.cause && e.cause.code) || (e && e.code);
+      if (code !== 'ECONNRESET' && code !== 'UND_ERR_SOCKET') throw e;
+      say('  （传输层一次性 ECONNRESET，重试一次：'
+        + url.replace(/^https?:\/\/127\.0\.0\.1:\d+/, '') + '）');
+      return await doFetch(url);
+    }
+  };
+
   try {
     let up = false;
     for (let i = 0; i < 40 && !up; i++) {
       await wait(120);
-      try { up = (await fetch(base + '/api/health')).ok; } catch { /* 还没起来 */ }
+      try { up = (await httpGet(base + '/api/health')).ok; } catch { /* 还没起来 */ }
     }
     check(up, '服务能正常启动');
 
     if (up) {
       /* ---- 错误结构 ---- */
-      const nf = await fetch(base + '/api/nope');
+      const nf = await httpGet(base + '/api/nope');
       check(nf.status === 404, '不存在的接口返回 404，不是 500');
       const nfBody = await nf.json();
       check(nfBody.ok === false && nfBody.error && nfBody.error.code === 'NO_SUCH_ENDPOINT',
@@ -364,7 +386,7 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
       const probe = path.join(dotDir, 'probe-secret.txt');
       fs.mkdirSync(dotDir, { recursive: true });
       fs.writeFileSync(probe, 'top-secret', 'utf8');
-      const dot = await fetch(base + '/.data/probe-secret.txt');
+      const dot = await httpGet(base + '/.data/probe-secret.txt');
       const dotTxt = await dot.text();
       check(dot.status === 404 && !dotTxt.includes('top-secret'),
         '以 . 开头的路径（.data 价格历史库）不被静态服务暴露，返回 ' + dot.status);
@@ -372,15 +394,15 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
 
       /* ---- 缓存真的生效 ---- */
       const q = encodeURIComponent('缓存验证词');
-      const c1 = await (await fetch(base + '/api/compare?q=' + q)).json();
-      const c2 = await (await fetch(base + '/api/compare?q=' + q)).json();
+      const c1 = await (await httpGet(base + '/api/compare?q=' + q)).json();
+      const c2 = await (await httpGet(base + '/api/compare?q=' + q)).json();
       check(c1.ok === true && c2.ok === true, '两次比价请求都成功');
       check(c2.cached === true && c1.cached !== true,
         '第二次走缓存（cached:true），不再重复打外部接口');
       check(c1.cached === false, '第一次明确标注 cached:false，不假装是缓存命中');
 
       /* ---- 省钱清单接口 ---- */
-      const bs = await fetch(base + '/api/basket?q=' + encodeURIComponent('耳机') + '&q=' + encodeURIComponent('键盘'));
+      const bs = await httpGet(base + '/api/basket?q=' + encodeURIComponent('耳机') + '&q=' + encodeURIComponent('键盘'));
       check(bs.status === 200, '省钱清单接口可用');
       const bsj = await bs.json();
       check(bsj.ok === true && typeof bsj.recommend === 'string',
@@ -389,24 +411,24 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
       check(typeof bsj.reason === 'string' && bsj.reason.length > 0, '建议带人话理由：' + bsj.reason);
       check(Array.isArray(bsj.unconfigured), '未接入的平台也一并告知，用户可以自己去看');
 
-      const bsEmpty = await fetch(base + '/api/basket');
+      const bsEmpty = await httpGet(base + '/api/basket');
       check(bsEmpty.status === 400, '清单不给商品时返回 400');
-      const bsMany = await fetch(base + '/api/basket?' + Array.from({ length: 9 }, (_, i) => 'q=i' + i).join('&'));
+      const bsMany = await httpGet(base + '/api/basket?' + Array.from({ length: 9 }, (_, i) => 'q=i' + i).join('&'));
       check(bsMany.status === 400, '清单超过 8 件被拒（保护外部配额，不是无限量服务）');
-      const bsLong = await fetch(base + '/api/basket?q=' + 'x'.repeat(41));
+      const bsLong = await httpGet(base + '/api/basket?q=' + 'x'.repeat(41));
       check(bsLong.status === 400, '单个关键词超长被拒');
 
       /* ---- 价格历史接口 ---- */
-      const hs = await fetch(base + '/api/history?platform=jd&sku=123');
+      const hs = await httpGet(base + '/api/history?platform=jd&sku=123');
       check(hs.status === 200, '价格历史接口可用');
       const hsj = await hs.json();
       check(hsj.found === false, '没采到的商品返回 found:false —— 线上也不编历史');
       check(/我们自己采集/.test(hsj.note), '历史响应带着「只含自采数据」的说明');
-      const hsBad = await fetch(base + '/api/history');
+      const hsBad = await httpGet(base + '/api/history');
       check(hsBad.status === 400, '历史接口缺参数返回 400');
 
       /* ---- 指标接口 ---- */
-      const msRes = await fetch(base + '/api/metrics');
+      const msRes = await httpGet(base + '/api/metrics');
       const msj = await msRes.json();
       check(msj.ok === true && !!msj.cache && !!msj.store, '/api/metrics 汇总了缓存与存储状态');
       check(msj.requests >= 3, '指标里的请求数在累计（当前 ' + msj.requests + '）');
@@ -416,7 +438,7 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
       check(typeof msj.store.skus === 'number', '指标里能看到价格历史库规模（' + msj.store.skus + ' 个商品）');
 
       /* ---- 静态资源不受限流影响 ---- */
-      const page1 = await fetch(base + '/');
+      const page1 = await httpGet(base + '/');
       check(page1.status === 200, '首页正常（限流不作用于静态资源，否则页面会白屏）');
     }
   } finally {
@@ -438,7 +460,7 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
     let up2 = false;
     for (let i = 0; i < 40 && !up2; i++) {
       await wait(120);
-      try { up2 = (await fetch(base2 + '/api/health')).ok; } catch { /* 还没起来 */ }
+      try { up2 = (await httpGet(base2 + '/api/health')).ok; } catch { /* 还没起来 */ }
     }
     check(up2, '低容量限流实例能启动（SXM_RL_BURST=4）');
 
@@ -447,7 +469,7 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
       let tries = 0;
       for (let i = 0; i < 12 && !blockedRes; i++) {
         tries++;
-        const r = await fetch(base2 + '/api/compare?q=限流验证');
+        const r = await httpGet(base2 + '/api/compare?q=限流验证');
         if (r.status === 429) blockedRes = r;
       }
       check(!!blockedRes, '持续打接口会被拦下 429（打到第 ' + tries + ' 次触发）');
@@ -460,7 +482,7 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
       }
 
       // 静态资源不该被 API 限流连累
-      const staticDuringLimit = await fetch(base2 + '/styles.css');
+      const staticDuringLimit = await httpGet(base2 + '/styles.css');
       check(staticDuringLimit.status === 200 || staticDuringLimit.status === 304,
         '临时被限流时静态资源仍然可访问（页面不会白屏）');
     }
