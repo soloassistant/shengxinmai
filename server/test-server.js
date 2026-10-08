@@ -385,6 +385,25 @@ say('\n— 聚合并发 —');
       const md = await fetch(base + '/README.md');
       check(md.status === 200, '静态文件服务正常（顺带能读 README）');
 
+      /* ---- 静态服务的边界：server/ 一律不对外 ----
+         serveStatic 原来只挡「以 . 开头的路径段」，而 server/ 不以 . 开头 ——
+         于是密钥文件、适配器、lib/ 全都能被公开下载。
+         2026-10-08 线上实测确认：/server/env.local.json 返回 200 / 882 B。
+         根因：密钥文件必须随部署目录上传（沙箱设不了 env），所以它就在静态根之内。
+         这几条盯着「密钥与后端源码绝不随静态服务下发」。 */
+      const envFile = await fetch(base + '/server/env.local.json');
+      check(envFile.status === 404,
+        '密钥文件 server/env.local.json 不可下载（返回 ' + envFile.status + '）');
+      const srvSrc = await fetch(base + '/server/server.js');
+      check(srvSrc.status === 404, '后端源码 server/server.js 不可下载');
+      const envLib = await fetch(base + '/server/lib/envfile.js');
+      check(envLib.status === 404, 'server/lib/ 下的模块不可下载');
+
+      /* 防误伤：挡住 server/ 之后前端必须照常工作。
+         没有这条的话，「把所有请求都 404 掉」也能让上面三条全绿。 */
+      const stillOk = await fetch(base + '/app.js');
+      check(stillOk.status === 200, '挡住 server/ 之后前端资产照常 200（没误伤自己）');
+
       const traversal = await fetch(base + '/../../etc/passwd');
       check(traversal.status === 403 || traversal.status === 404,
         '路径穿越被挡住（返回 ' + traversal.status + '）');

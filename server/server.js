@@ -199,6 +199,21 @@ function serveStatic(req, res, urlPath) {
     return;
   }
 
+  /* ---------- 第 1 步：server/ 前缀一律不对外（2026-10-08） ----------
+     上面那条「以 . 开头」的黑名单**挡不住 server/**，而最要命的东西正好全在那里：
+     env.local.json（密钥，而且因为部署沙箱设不了 env，它必须随目录上传 ——
+     也就是 ROOT 之内，**移不走**。线上实测 /server/env.local.json 是 200）、
+     adapters/（各联盟字段映射）、lib/envfile.js（密钥怎么被加载的）。
+     连带暴露的还有 tools/、test-*.txt、package.json、README.md ——
+     等于把「用了哪些平台接口、限流阈值、配置读取方式」一起交出去。
+
+     只加这一条、只挡一个前缀，风险接近零：前端资产没有一个在 server/ 下。
+     完整方案是白名单（fail-closed，新增文件默认不对外），见下一步。 */
+  if (segments[0] === 'server') {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found');
+    return;
+  }
+
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) {
       res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found');
