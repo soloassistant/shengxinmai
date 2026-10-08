@@ -305,6 +305,126 @@ check(knownShape.price === 100, '大淘客标价取 originalPrice：' + knownSha
 const noActual = dataoke._normalizeOne({ title: 'x', originalPrice: 100, couponPrice: 20, itemLink: 'u' });
 check(noActual.final === 80, '大淘客缺 actualPrice 时 100-20=80，实际 ' + noActual.final);
 
+/* --------------------------------------------------------------------------
+   5b. 密钥错 / 网关错，必须报「错」，不能报「没有商品」
+
+   下面的响应体是 2026-10-08 用**假密钥**打四家真实端点实测抄回来的原文，
+   不是照着文档编的。四家的错误契约各不相同，其中两家是「HTTP 200 却带着错误」：
+     大淘客   HTTP 439  {"message":"appkey不存在.."}          ← 状态码非标准、且 body 无 code
+     京东联盟 HTTP 200  {"error_response":{"code":"21",...}}   ← 200 带错
+     拼多多   HTTP 200  {"error_response":{"error_msg":...}}    ← 200 带错
+     ignav    HTTP 401  {"error":{"code":"invalid_api_key"}}
+   这一族最容易出的 bug 是「把密钥错说成没有商品」——用户会去改关键词，
+   而不是去查密钥，越查越远。
+   -------------------------------------------------------------------------- */
+say('\n— 密钥/网关错误不能被说成「没有商品」 —');
+
+/* 注意：这一段是 async 的（要 await 桩住的请求），而本文件是 CJS、模块顶层不允许
+   await，所以包成函数由最后那个主 IIFE 在打汇总行之前 await 掉 —— 别写成顶层 await，
+   那会让整份套件 SyntaxError 崩掉（比红一条更糟，曾经踩过）。 */
+async function checkUpstreamErrorContracts() {
+
+/** 只桩传输层（globalThis.fetch），适配器自身的签名、解析、判错逻辑全是真跑的 */
+async function withStubbedFetch(reply, fn) {
+  const realFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return {
+      ok: reply.status >= 200 && reply.status < 300,
+      status: reply.status,
+      async text() { return reply.body; }
+    };
+  };
+  try { return { result: await fn(), calls }; }
+  finally { globalThis.fetch = realFetch; }
+}
+
+const dkEnv = { DATAOKE_APP_KEY: 'FAKE_KEY', DATAOKE_APP_SECRET: 'FAKE_SECRET' };
+
+// 实测原文：密钥不存在，HTTP 439，body 里没有 code 字段
+const dkBadKey = await withStubbedFetch(
+  { status: 439, body: '{"message":"appkey不存在.."}' },
+  () => dataoke.search('耳机', dkEnv)
+);
+check(dkBadKey.result.items.length === 0
+  && dkBadKey.result.note.indexOf('439') !== -1
+  && dkBadKey.result.note.indexOf('appkey不存在') !== -1,
+  '大淘客密钥错（HTTP 439 + appkey不存在）报的是错误本身，实际：' + dkBadKey.result.note);
+check(dkBadKey.result.note.indexOf('没有推广商品') === -1,
+  '⚠ 不再把「密钥错」伪装成「该关键词没有推广商品」');
+check(dkBadKey.calls.length === 1,
+  '业务错误不重试（重试也治不好签名/key 的问题，只会白等），实际发了 ' + dkBadKey.calls.length + ' 次');
+
+// 大淘客正常路径：HTTP 200 + code:0 + 列表
+const dkOk = await withStubbedFetch(
+  { status: 200, body: JSON.stringify({ code: 0, data: { list: [
+    { title: '测试耳机', originalPrice: 100, actualPrice: 80, couponPrice: 20, itemLink: 'https://x/1' }
+  ] } }) },
+  () => dataoke.search('耳机', dkEnv)
+);
+check(dkOk.result.items.length === 1 && dkOk.result.items[0].final === 80,
+  '大淘客正常路径不受影响：' + dkOk.result.items.length + ' 条，到手价 ' + (dkOk.result.items[0] || {}).final);
+
+// 大淘客业务错：HTTP 200 + code 非 0（这条原本就有，留着防回归）
+const dkBizErr = await withStubbedFetch(
+  { status: 200, body: '{"code":10001,"msg":"参数错误"}' },
+  () => dataoke.search('耳机', dkEnv)
+);
+check(dkBizErr.result.note.indexOf('10001') !== -1 && dkBizErr.result.note.indexOf('参数错误') !== -1,
+  '大淘客 code 非 0 带着 code 与 msg 一起报出来，实际：' + dkBizErr.result.note);
+
+// 大淘客 HTTP 200 但响应壳变了（既无 code 也无列表）—— 不能静默当"没有商品"
+const dkShape = await withStubbedFetch(
+  { status: 200, body: '{"unexpected":"shape"}' },
+  () => dataoke.search('耳机', dkEnv)
+);
+check(dkShape.result.note.indexOf('响应壳') !== -1,
+  '大淘客响应壳变了会自曝而不是静默返回空，实际：' + dkShape.result.note);
+
+// 京东：实测 HTTP 200 + error_response（网关错带上 200，只看 status 会当成功）
+const jdErr = await withStubbedFetch(
+  { status: 200, body: '{"error_response":{"code":"21","zh_desc":"key=FAKE 信息无效"}}' },
+  () => jd.search('耳机', { JD_UNION_APP_KEY: 'FAKE', JD_UNION_APP_SECRET: 'FAKE' })
+);
+check(jdErr.result.items.length === 0 && jdErr.result.note.indexOf('21') !== -1,
+  '京东网关错（HTTP 200 带 error_response）被抓到并报出来，实际：' + jdErr.result.note);
+check(jdErr.result.note.indexOf('没有推广商品') === -1,
+  '⚠ 京东同样不把网关错说成「没有商品」');
+
+// 拼多多：实测 HTTP 200 + error_response（公共参数错误也是这样来的）
+const pddErr = await withStubbedFetch(
+  { status: 200, body: '{"error_response":{"error_msg":"公共参数错误:timestamp","error_code":10001}}' },
+  () => pdd.search('耳机', { PDD_CLIENT_ID: 'FAKE', PDD_CLIENT_SECRET: 'FAKE' })
+);
+check(pddErr.result.items.length === 0 && pddErr.result.note.indexOf('10001') !== -1,
+  '拼多多网关错（HTTP 200 带 error_response）被抓到并报出来，实际：' + pddErr.result.note);
+
+// ignav：实测 HTTP 401 + error.code=invalid_api_key
+const igErr = await withStubbedFetch(
+  { status: 401, body: '{"error":{"type":"auth_error","code":"invalid_api_key","message":"API key is invalid."}}' },
+  () => ignav.searchRoute({ from: 'PEK', to: 'CAN', date: '2026-11-07' }, { IGNAV_API_KEY: 'FAKE' })
+);
+check(igErr.result.items.length === 0
+  && (igErr.result.note.indexOf('401') !== -1 || igErr.result.note.indexOf('invalid_api_key') !== -1),
+  '机票密钥无效（HTTP 401）报的是错误本身，实际：' + (igErr.result.note || '(空)'));
+
+/* 反向验证：桩只换传输层，不能顺手改掉适配器的成功路径 */
+const igOk = await withStubbedFetch(
+  { status: 200, body: JSON.stringify({ origin: 'PEK', destination: 'CAN', departure_date: '2026-11-07',
+    itineraries: [{ price: { amount: 680, currency: 'CNY', status: 'verified' },
+      outbound: { carrier: 'Air China', duration_minutes: 195,
+        segments: [{ marketing_carrier_code: 'CA', flight_number: '1301',
+          departure_airport: 'PEK', arrival_airport: 'CAN',
+          departure_time_local: '2026-11-07T08:00:00', arrival_time_local: '2026-11-07T11:15:00' }] } }] }) },
+  () => ignav.searchRoute({ from: 'PEK', to: 'CAN', date: '2026-11-07' }, { IGNAV_API_KEY: 'FAKE' })
+);
+check(igOk.result.items.length === 1 && igOk.result.items[0].price === 680,
+  '机票正常路径也能过（桩没有把成功路径一起改坏），实际 ' + igOk.result.items.length + ' 条，'
+  + '价格 ' + (igOk.result.items[0] || {}).price);
+
+}   /* ← checkUpstreamErrorContracts 结束 */
+
 /* ==========================================================================
    6. 聚合契约：一个平台挂掉，整体还得能用
    ========================================================================== */
@@ -405,6 +525,7 @@ say('\n— 聚合并发 —');
         ['/server/lib/basket.js', '省钱清单逻辑'],
         ['/server/adapters/dataoke.js', '联盟字段映射'],
         ['/tools/mutate-verify.py', '测试工具'],
+    ['/tools/check-keys.js', '密钥自检工具（会读 env，更不该被下载）'],
         ['/package.json', '依赖与脚本清单'],
         ['/README.md', '项目文档'],
         ['/test-out.txt', '测试日志'],
@@ -564,6 +685,9 @@ say('\n— 聚合并发 —');
   } finally {
     proc.kill();
   }
+
+  /* 上游错误契约的检查（纯桩，不需要真服务）——放在打汇总行之前，确保它一定跑到 */
+  await checkUpstreamErrorContracts();
 
   say('\n结果：' + pass + ' 通过 / ' + fail + ' 失败');
   fs.writeFileSync(path.join(__dirname, '..', 'test-server-out.txt'), LOG.join('\n'), 'utf8');

@@ -155,12 +155,26 @@ module.exports = {
       retries: 1
     });
 
-    if (!res.ok && !res.json) {
-      // 出网被挡 / 超时 / 上游 4xx-5xx —— 都如实说，不编价格
-      return { items: [], note: `机票接口请求失败（HTTP ${res.status}）：${String(res.text || '').slice(0, 160)}` };
+    /* ⚠ 原写法是 `if (!res.ok && !res.json)`，`res.json` 是**对象**、恒为真值
+       ⇒ `!res.json` 永远 false ⇒ **这个分支从来没执行过**。
+       而 ignav 密钥无效时返回的是 HTTP 401 + `{"error":{"code":"invalid_api_key"}}`：
+       body 里有 json，于是它躲过这个死分支；`extractList` 又取不到 itineraries，
+       最后一句话就被报成「这条航线当天没有查到报价（可能无航班或已售罄）」——
+       **把「密钥错了」说成「没有航班」**。
+       （401 与 error.code 的取值是 2026-10-08 用假密钥实测的。） */
+    if (!res.ok) {
+      const e = (res.json && res.json.error) || {};
+      const msg = e.message || e.code || String(res.text || '').slice(0, 160) || '无描述';
+      const where = res.status === 0 ? '请求失败（网络层）' : `请求失败（HTTP ${res.status}）`;
+      return { items: [], note: `机票接口${where}：${msg}` };
     }
     const body = res.json;
     if (!body) return { items: [], note: '机票接口返回不是 JSON：' + String(res.text || '').slice(0, 160) };
+    // HTTP 200 但带着 error 对象 —— 也不能当成"没有航班"
+    if (body.error) {
+      const e = body.error;
+      return { items: [], note: `机票接口报错 ${e.code || ''}：${e.message || e.type || '无描述'}` };
+    }
 
     const list = extractList(body);
     const items = sortByPrice(

@@ -89,8 +89,20 @@ module.exports = {
       .join('&');
 
     const res = await fetchJsonRetry(ENDPOINT + '?' + qs, { timeout: 9000, retries: 1 });
-    if (!res.ok && !res.json) {
-      return { items: [], note: `请求失败（HTTP ${res.status}）：${res.text}` };
+
+    /* ⚠ 原写法是 `if (!res.ok && !res.json)`，而 `res.json` 是**对象**、
+       恒为真值 ⇒ `!res.json` 永远是 false ⇒ **这个分支从来没执行过**。
+       偏偏大淘客在密钥无效时返回的是 **HTTP 439**（非标准状态码）+
+       `{"message":"appkey不存在.."}` —— **body 里没有 code 字段**，
+       于是它既躲过了这个死分支，也躲过了下面按 `code !== 0` 判错的守卫，
+       一路走到函数末尾被报成「该关键词没有推广商品」。
+       把「密钥错了」说成「没有商品」是最容易被带偏的一类假结论：
+       用户会以为关键词不对，而不是去看密钥。
+       （439 与 message 的取值都是 2026-10-08 用假密钥实测的，不是推测。） */
+    if (!res.ok) {
+      const msg = (res.json && (res.json.msg || res.json.message)) || res.text || '无描述';
+      const where = res.status === 0 ? '请求失败（网络层）' : `请求失败（HTTP ${res.status}）`;
+      return { items: [], note: `${where}：${msg}` };
     }
     const body = res.json;
     if (!body) return { items: [], note: '返回不是 JSON：' + res.text };
@@ -98,6 +110,11 @@ module.exports = {
     // 大淘客用 code=0 表示成功
     if (body.code !== undefined && Number(body.code) !== 0) {
       return { items: [], note: `接口返回 code=${body.code}：${body.msg || body.message || '无描述'}` };
+    }
+
+    // HTTP 200 但既没 code 也没列表 —— 壳变了，别静默当作"没有商品"
+    if (body.code === undefined && extractList(body).length === 0) {
+      return { items: [], note: '响应里既没有 code 也没有商品列表，响应壳可能变了', rawSample: Object.keys(body).slice(0, 20) };
     }
 
     const list = extractList(body);
