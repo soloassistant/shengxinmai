@@ -582,6 +582,26 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
   }
   check(published.size > 0, '能解析出 Pages 的归集白名单（' + published.size + ' 个文件）');
 
+  /* ★ 白名单漂移守卫（2026-10-08）
+     「哪些文件能对外」这个问题在仓库里有**两处**独立实现：
+       · .github/workflows/pages.yml 的 cp 白名单  → GitHub Pages 用
+       · server/lib/static-whitelist.js           → Node 静态服务用
+     两处不同步就是 bug，而且两个方向都坏：
+       Pages 漏一个 → 线上静默 404（图标加载失败连报错都没有）；
+       Node 多一个  → 又一个文件被公开下载（2026-10-08 就是这么泄的 server/）。
+     所以这里断言**集合相等**，差一个就红 —— 别靠人记得同步。
+     pages.yml 多出的 .nojekyll 是 Pages 专用开关（关掉 Jekyll 处理），
+     不属于对外的「资产」，Node 侧不需要，故排除。 */
+  const { STATIC_WHITELIST } = require('../server/lib/static-whitelist');
+  const wlNode = [...STATIC_WHITELIST].sort();
+  const wlPages = [...published].filter((f) => f !== '.nojekyll').sort();
+  const onlyNode = wlNode.filter((f) => !wlPages.includes(f));
+  const onlyPages = wlPages.filter((f) => !wlNode.includes(f));
+  check(onlyNode.length === 0 && onlyPages.length === 0,
+    '两份白名单集合相等（Node 静态服务 ↔ pages.yml，共 ' + wlNode.length + ' 个）'
+    + (onlyNode.length ? '｜只在 Node 侧多出：' + onlyNode.join('、') : '')
+    + (onlyPages.length ? '｜只在 Pages 侧多出：' + onlyPages.join('、') : ''));
+
   const localRefs = new Set();
   const refRe = /(?:href|src)\s*=\s*"([^"]+)"/g;
   let rm;

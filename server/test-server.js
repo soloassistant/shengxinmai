@@ -24,6 +24,7 @@ const check = (cond, m) => (cond ? ok(m) : bad(m));
 
 const sign = require('./lib/sign');
 const { toYuan, pick } = require('./lib/http');
+const { STATIC_WHITELIST } = require('./lib/static-whitelist');
 const dataoke = require('./adapters/dataoke');
 const jd = require('./adapters/jd');
 const pdd = require('./adapters/pdd');
@@ -382,27 +383,60 @@ say('\n— 聚合并发 —');
       const html = await page.text();
       check(page.ok && html.includes('省心买'), '根路径能正常返回页面');
 
-      const md = await fetch(base + '/README.md');
-      check(md.status === 200, '静态文件服务正常（顺带能读 README）');
+      /* 「静态文件服务正常」原来拿 /README.md 当探针，还断言它必须 200 ——
+         那等于把「README 对外可读」当成**功能在守**，测试自己成了暴露面的帮凶。
+         换成真正的前端资产。 */
+      const asset = await fetch(base + '/data.js');
+      check(asset.status === 200, '静态文件服务正常（data.js 返回 200）');
 
-      /* ---- 静态服务的边界：server/ 一律不对外 ----
-         serveStatic 原来只挡「以 . 开头的路径段」，而 server/ 不以 . 开头 ——
+      /* ---- 静态服务的边界：白名单（2026-10-08） ----
+         原来只挡「以 . 开头的路径段」，而 server/ 不以 . 开头 ——
          于是密钥文件、适配器、lib/ 全都能被公开下载。
-         2026-10-08 线上实测确认：/server/env.local.json 返回 200 / 882 B。
-         根因：密钥文件必须随部署目录上传（沙箱设不了 env），所以它就在静态根之内。
-         这几条盯着「密钥与后端源码绝不随静态服务下发」。 */
-      const envFile = await fetch(base + '/server/env.local.json');
-      check(envFile.status === 404,
-        '密钥文件 server/env.local.json 不可下载（返回 ' + envFile.status + '）');
-      const srvSrc = await fetch(base + '/server/server.js');
-      check(srvSrc.status === 404, '后端源码 server/server.js 不可下载');
-      const envLib = await fetch(base + '/server/lib/envfile.js');
-      check(envLib.status === 404, 'server/lib/ 下的模块不可下载');
+         线上实测：/server/env.local.json → 200 / 882 B、
+         /server/server.js → 200 / 26,490 B、/server/lib/envfile.js → 200 / 1,161 B。
 
-      /* 防误伤：挡住 server/ 之后前端必须照常工作。
-         没有这条的话，「把所有请求都 404 掉」也能让上面三条全绿。 */
-      const stillOk = await fetch(base + '/app.js');
-      check(stillOk.status === 200, '挡住 server/ 之后前端资产照常 200（没误伤自己）');
+         根因：密钥文件必须随部署目录上传（沙箱设不了 env），
+         所以它必然在静态根之内，**移不走** —— 只能靠服务端不给。
+         逐条验「不能下载」。 */
+      const forbidden = [
+        ['/server/env.local.json', '密钥文件'],
+        ['/server/server.js', '后端源码'],
+        ['/server/lib/envfile.js', '密钥加载逻辑'],
+        ['/server/lib/basket.js', '省钱清单逻辑'],
+        ['/server/adapters/dataoke.js', '联盟字段映射'],
+        ['/tools/mutate-verify.py', '测试工具'],
+        ['/package.json', '依赖与脚本清单'],
+        ['/README.md', '项目文档'],
+        ['/test-out.txt', '测试日志'],
+        ['/test-parse.js', '前端测试源码']
+      ];
+      const wlLeaked = [];
+      for (const [p, what] of forbidden) {
+        const r = await fetch(base + p);
+        if (r.status !== 404) wlLeaked.push(p + '(' + what + ')→' + r.status);
+      }
+      check(wlLeaked.length === 0,
+        '白名单之外的文件一律不可下载（' + forbidden.length + ' 条全部 404）'
+        + (wlLeaked.length ? '，漏了：' + wlLeaked.join('、') : ''));
+
+      /* 反向：白名单里的文件必须**全部**照常 200。
+         没有这条的话，「把所有请求都 404 掉」也能让上面那条全绿 ——
+         那就从「泄露」直接变成「页面全白」，是另一种坏。 */
+      const wlMissing = [];
+      for (const p of STATIC_WHITELIST) {
+        const r = await fetch(base + '/' + p);
+        if (r.status !== 200) wlMissing.push(p + '→' + r.status);
+      }
+      check(wlMissing.length === 0,
+        '白名单里的 ' + STATIC_WHITELIST.size + ' 个前端资产全部照常 200'
+        + (wlMissing.length ? '，坏了：' + wlMissing.join('、') : ''));
+
+      /* 白名单写窄了会把页面搞坏，写错文件名也一样 ——
+         断言每一项在磁盘上真实存在，别等线上 404 才发现。 */
+      const ghosts = [...STATIC_WHITELIST].filter((f) => !fs.existsSync(path.join(__dirname, '..', f)));
+      check(ghosts.length === 0,
+        '白名单里的文件在磁盘上都存在（写错名字会当场被抓住）'
+        + (ghosts.length ? '，不存在：' + ghosts.join('、') : ''));
 
       const traversal = await fetch(base + '/../../etc/passwd');
       check(traversal.status === 403 || traversal.status === 404,

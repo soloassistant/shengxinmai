@@ -45,6 +45,7 @@ const { createStore, titleFingerprint } = require('./lib/store');
 const { computeBasket, DEFAULT_THRESHOLD } = require('./lib/basket');
 const { settle } = require('./lib/http');
 const { loadEnvFile } = require('./lib/envfile');
+const { STATIC_WHITELIST } = require('./lib/static-whitelist');
 
 /* 密钥装载：优先真实环境变量，其次 server/env.local.json（部署沙箱设不了 env，密钥随目录走）。
    必须在读取任何 process.env 之前执行。 */
@@ -199,17 +200,19 @@ function serveStatic(req, res, urlPath) {
     return;
   }
 
-  /* ---------- 第 1 步：server/ 前缀一律不对外（2026-10-08） ----------
-     上面那条「以 . 开头」的黑名单**挡不住 server/**，而最要命的东西正好全在那里：
-     env.local.json（密钥，而且因为部署沙箱设不了 env，它必须随目录上传 ——
-     也就是 ROOT 之内，**移不走**。线上实测 /server/env.local.json 是 200）、
-     adapters/（各联盟字段映射）、lib/envfile.js（密钥怎么被加载的）。
-     连带暴露的还有 tools/、test-*.txt、package.json、README.md ——
-     等于把「用了哪些平台接口、限流阈值、配置读取方式」一起交出去。
+  /* ---------- 第 2 步：改成白名单（fail-closed，2026-10-08） ----------
+     上面那条「以 . 开头」和上一版只挡 server/ 的一条，都是**黑名单**：
+     必须穷举「哪些不能给」，漏一个就泄一个。
+     改成白名单之后，没列进来的**默认不对外** —— 将来新增密钥文件、
+     调试脚本、日志，不用记得来改这里也不会被发出去。
 
-     只加这一条、只挡一个前缀，风险接近零：前端资产没有一个在 server/ 下。
-     完整方案是白名单（fail-closed，新增文件默认不对外），见下一步。 */
-  if (segments[0] === 'server') {
+     清单在 server/lib/static-whitelist.js，与 pages.yml 的 cp 白名单
+     是同一个判断，靠 test-quality.js 的集合相等断言守住漂移。
+
+     一律回 404（不是 403）：403 等于承认「这个文件存在，只是不给你」，
+     对探测者是有效信息。 */
+  const name = rel.replace(/^\/+/, '');
+  if (!STATIC_WHITELIST.has(name)) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found');
     return;
   }
