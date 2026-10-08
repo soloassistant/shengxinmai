@@ -786,9 +786,17 @@
         </div>`;
     }).join('');
 
-    const idle = data.unconfigured.length
+    /* ⚠ `unconfigured` 是**服务端字段**，但这里是裸访问（2026-10-08）。
+       同一族里其余字段最坏只是印出字面量 undefined（难看），
+       而 `.length` 挂在 undefined 上会**直接抛** —— 整张比价卡渲染不出来。
+       为什么现在没炸：两个调用方恰好都供了这个字段
+       （demoLive 明确返回 unconfigured: []，服务端 adapters/index.js 也总会带上）。
+       但 liveCompare 只校验了 platforms、**没校验同级的 unconfigured** ——
+       校验是不对称的，接口契约一变这里就是白屏。跟 data.notes / data.failed
+       用同一个惯用法兜住。 */
+    const idle = (data.unconfigured || []).length
       ? `<div class="live-empty" style="margin-top:12px">这些平台还没配密钥，配上就会一起比进来：${
-          data.unconfigured.map((u) => esc(u.name)).join('、')
+          (data.unconfigured || []).map((u) => esc(u.name)).join('、')
         }</div>`
       : '';
 

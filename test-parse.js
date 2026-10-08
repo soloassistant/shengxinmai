@@ -1647,6 +1647,44 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
     '关注列表里 dataoke 的平台名显示为「淘宝 / 天猫」，不是内部的「大淘客」（导入 ' + wImported + ' 条）');
   SXM.closeDrawer();
 
+  /* ---------- 唯一会"抛"的那处：data.unconfigured 裸访问（2026-10-08） ----------
+     这一族（服务端字段缺值直接上屏）绝大多数最坏只是印出字面量 undefined，
+     难看但卡片还在。`data.unconfigured.length` 不一样 —— 挂在 undefined 上**直接抛**，
+     整张比价卡渲染不出来（白屏）。
+     为什么线上没炸：两个调用方恰好都供了这个字段 —— demoLive 明确返回
+     `unconfigured: []`，服务端的 compare 也总会带上。但 liveCompare 只校验
+     platforms、**没校验同级的 unconfigured**，契约一变这里就是白屏。
+     所以这是**潜在**崩溃点，不是正在发生的故障 —— 这点要说准，别夸大。
+     注意 789 在 791 前面：789 一抛，791 根本走不到。 */
+  say('\n— 唯一崩溃点：unconfigured 缺失时不能把整张卡带下去 —');
+
+  // 正向对照：字段在且非空 → 这行必须真的画出来。
+  // 缺少这条的话，「干脆永远不画这一行」也能让下面的负向断言全绿。
+  const idleShown = SXM.renderShopLive('耳机', liveData(
+    [{ title: 'X', final: 1 }],
+    { unconfigured: [{ id: 'jd', name: '京东' }, { id: 'pdd', name: '拼多多' }] }
+  ));
+  chk(idleShown.indexOf('这些平台还没配密钥') !== -1
+      && idleShown.indexOf('京东') !== -1 && idleShown.indexOf('拼多多') !== -1,
+    'unconfigured 有内容时，没配密钥的平台名照常列出来（这行没被守卫吃掉）');
+
+  for (const [label, kind] of [['整个缺失', 'missing'], ['显式为 null', 'null']]) {
+    const d = liveData([{ title: 'X', final: 1 }]);
+    if (kind === 'missing') delete d.unconfigured; else d.unconfigured = null;
+    let card = '';
+    try { card = SXM.renderShopLive('耳机', d); }
+    catch (e) { card = '<<渲染直接抛了：' + (e && e.message) + '>>'; }
+    /* ⚠ 必须同时断言"卡片真的渲染出来了" —— 只看"没抛"会假绿
+       （返回占位串也满足）。这条纪律是在 D 类那条假绿断言上换来的。 */
+    chk(card.indexOf('实时比价') !== -1,
+      'unconfigured ' + label + ' 时卡片照样渲染（不是靠"没渲染"过关），实际 '
+      + card.replace(/\s+/g, ' ').trim().slice(0, 70));
+    chk(card.indexOf('undefined') === -1 && card.indexOf('<<渲染直接抛了') === -1,
+      'unconfigured ' + label + ' 时不会把字面量 undefined 印上屏'
+      + '（也必须真的渲染了 —— 渲染抛掉时 card 是占位串，里面当然没有 undefined，'
+      + '只查这一半会假绿）');
+  }
+
   /* ---------- E 类：抽屉的 inert 与互锁 ---------- */
   say('\n— E 类：抽屉 inert 与互锁 —');
 
