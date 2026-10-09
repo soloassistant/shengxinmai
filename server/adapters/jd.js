@@ -16,7 +16,7 @@
 'use strict';
 
 const { signJd } = require('../lib/sign');
-const { fetchJsonRetry, pick, toYuan } = require('../lib/http');
+const { fetchJsonRetry, pick, toYuan, absoluteImage } = require('../lib/http');
 
 const ENDPOINT = 'https://api.jd.com/routerjson';
 const METHOD   = 'jd.union.open.goods.query';
@@ -53,7 +53,17 @@ function normalizeOne(raw) {
     url: pick(raw, ['materialUrl', 'itemUrl', 'url']) || '',
     shop: pick(raw.shopInfo || {}, ['shopName']) || '',
     sales: Number(pick(raw, ['inOrderCount30Days', 'comments', 'sales']) || 0),
-    img: pick(raw, ['imageUrl', 'img', 'pic']) || '',
+    /* ⚠ 键名必须是 `image`（前端 `renderShopLive` 读的是 `it.image`），
+       以前回的是 `img` —— 键名对不上，图片永远取不到且不报错（2026-10-09 修）。
+       京东的真实字段在**嵌套的** `imageInfo.imageList[0].url`，
+       所以要先把那一层取出来当候选，不能只在外层 pick。 */
+    image: absoluteImage(
+      pick(raw, ['imageUrl', 'img', 'pic'])
+      || (raw.imageInfo && Array.isArray(raw.imageInfo.imageList)
+            ? pick(raw.imageInfo.imageList[0], ['url']) || ''
+            : '')
+      || ''
+    ),
     commissionRate: pick(raw.commissionInfo || {}, ['commissionShare']) || null
   };
 }

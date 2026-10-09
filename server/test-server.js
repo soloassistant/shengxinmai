@@ -23,7 +23,7 @@ const bad = (m) => { fail++; say('✗  ' + m); };
 const check = (cond, m) => (cond ? ok(m) : bad(m));
 
 const sign = require('./lib/sign');
-const { toYuan, pick } = require('./lib/http');
+const { toYuan, pick, absoluteImage } = require('./lib/http');
 const { STATIC_WHITELIST } = require('./lib/static-whitelist');
 const dataoke = require('./adapters/dataoke');
 const jd = require('./adapters/jd');
@@ -426,8 +426,62 @@ check(igOk.result.items.length === 1 && igOk.result.items[0].price === 680,
 }   /* ← checkUpstreamErrorContracts 结束 */
 
 /* ==========================================================================
+   5c. 商品图：键名契约 + 字段候选 + 协议相对地址
+   --------------------------------------------------------------------------
+   2026-10-09 修的一条**全程静默**的缺陷链，三层叠加：
+     ① 键名错位 —— 三个适配器回 `img`，前端 `renderShopLive` 读的是 `it.image`；
+     ② 字段候选缺真名 —— 大淘客真实字段是 `pic_url`，京东在**嵌套的**
+        `imageInfo.imageList[0].url`，原来都没列；
+     ③ 协议相对 —— 联盟常回 `//img…`，而前端 `safeImg` 只认 `^https?://`。
+   结果：**有图也永远只有首字占位块，且不报任何错**。
+   最上面那条（键名）是这次的关键：两边各自的测试都在绿，因为没人把两边钉在一起。
+   ========================================================================== */
+say('\n— 商品图（键名契约 / 字段候选 / 协议相对）—');
+
+/* ① 接口钉死：前端读哪个键，适配器就必须回哪个键。
+   这条断言直接从 app.js 源码里把键名抠出来，而不是在测试里再抄一遍 —— 
+   抄一遍就等于把"两边一致"这件事变成了"测试自己和自己一致"，正是这次漏掉的原因。 */
+const appSrc = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+const imgKeyMatch = /safeImg\(it\.([A-Za-z_$][\w$]*)\)/.exec(appSrc);
+const imgKey = imgKeyMatch ? imgKeyMatch[1] : '';
+check(imgKey !== '', '能在 app.js 里找到前端读取的图片键（safeImg(it.X)），实际「' + imgKey + '」');
+for (const [name, adapter] of [['大淘客', dataoke], ['京东', jd], ['拼多多', pdd]]) {
+  const out = adapter._normalizeOne({});
+  check(Object.prototype.hasOwnProperty.call(out, imgKey),
+    name + '适配器产出的字段里有前端读的那个键 `' + imgKey + '`（'
+    + Object.keys(out).join('/') + '）');
+}
+
+/* ② 字段候选：三家的真实字段名 */
+const dkImg = dataoke._normalizeOne({ title: 'x', pic_url: '//img.alicdn.com/a.jpg' });
+check(dkImg.image === 'https://img.alicdn.com/a.jpg',
+  '大淘客认 `pic_url`，并把协议相对补成 https：实际「' + dkImg.image + '」');
+
+const jdImg = jd._normalizeOne({ skuName: 'x', imageInfo: { imageList: [{ url: '//img.jd.com/b.jpg' }] } });
+check(jdImg.image === 'https://img.jd.com/b.jpg',
+  '京东能取到嵌套的 imageInfo.imageList[0].url 并补协议：实际「' + jdImg.image + '」');
+
+const pddImg = pdd._normalizeOne({ goods_name: 'x', goods_thumbnail_url: 'https://img.pdd.com/c.jpg' });
+check(pddImg.image === 'https://img.pdd.com/c.jpg',
+  '拼多多认 `goods_thumbnail_url`：实际「' + pddImg.image + '」');
+
+/* ③ absoluteImage 的边界：只补「没有协议」这一种，其余原样交给前端判据去拒 */
+check(absoluteImage('//x/y.png') === 'https://x/y.png', '协议相对 → 补 https');
+check(absoluteImage('https://x/y.png') === 'https://x/y.png', '已经是 https 的不动');
+check(absoluteImage('http://x/y.png') === 'http://x/y.png', 'http 原样保留（不擅自升级上游的协议）');
+check(absoluteImage('javascript:alert(1)') === 'javascript:alert(1)',
+  'javascript: 原样返回 —— 由前端 safeImg 去拒，不在这一层悄悄"洗白"');
+check(absoluteImage(null) === '' && absoluteImage(undefined) === '', 'null / undefined → 空串');
+check(absoluteImage('  //x/y.png  ') === 'https://x/y.png', '带空白也认（先 trim）');
+
+/* ④ 反向：绝不能为了显示图片去放宽前端判据 —— 协议相对地址仍不许直接渲染 <img> */
+check(/safeImg[\s\S]{0,120}test\(s\)/.test(appSrc) || appSrc.indexOf('/^https?:\\/\\//i.test(s)') !== -1,
+  '前端 safeImg 仍然只认 http/https（没有为了显示图片被放宽）');
+
+/* ==========================================================================
    6. 聚合契约：一个平台挂掉，整体还得能用
    ========================================================================== */
+
 say('\n— 聚合并发 —');
 
 (async () => {

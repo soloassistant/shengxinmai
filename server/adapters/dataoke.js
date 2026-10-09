@@ -15,7 +15,7 @@
 'use strict';
 
 const { signDataoke } = require('../lib/sign');
-const { fetchJsonRetry, pick, toYuan } = require('../lib/http');
+const { fetchJsonRetry, pick, toYuan, absoluteImage } = require('../lib/http');
 
 const ENDPOINT = 'https://openapi.dataoke.com/api/goods/get-goods-list';
 const VERSION  = 'v1.2.0';
@@ -45,7 +45,13 @@ function normalizeOne(raw) {
     url: pick(raw, ['couponLink', 'itemLink', 'shortUrl', 'link', 'url']) || '',
     shop: pick(raw, ['shopName', 'sellerName', 'shop_name']) || '',
     sales: Number(pick(raw, ['monthSales', 'sales', 'volume']) || 0),
-    img: pick(raw, ['mainPic', 'mainImage', 'pic']) || '',
+    /* ⚠ 键名必须是 `image`，不是 `img`（2026-10-09 修）。
+       前端 `renderShopLive` 读的是 `it.image`，而这里以前回的是 `img` ——
+       两边键名不一致，图片**永远取不到**，页面上只剩首字占位块，而且不报任何错。
+       大淘客的真实字段名是 `pic_url`（原来那三个候选里没有它），一并补上。
+       图片地址要过 `absoluteImage`：联盟常回 `//img…` 这种协议相对地址，
+       而前端 `safeImg` 只认 `^https?://`（它是故意的，有断言钉着），不补就白拿。 */
+    image: absoluteImage(pick(raw, ['pic_url', 'picUrl', 'mainPic', 'mainImage', 'imageUrl', 'img', 'pic']) || ''),
     commissionRate: pick(raw, ['commissionRate', 'commission_rate']) || null
   };
 }

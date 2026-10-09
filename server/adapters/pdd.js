@@ -19,7 +19,7 @@
 'use strict';
 
 const { signPdd } = require('../lib/sign');
-const { fetchJson, withRetry, pick, toYuan } = require('../lib/http');
+const { fetchJson, withRetry, pick, toYuan, absoluteImage } = require('../lib/http');
 
 const ENDPOINT = 'https://gw-api.pinduoduo.com/api/router';
 const TYPE     = 'pdd.ddk.goods.search';
@@ -52,7 +52,10 @@ function normalizeOne(raw) {
       const m = String(tip).match(/^([\d.]+)\s*(万)?/);
       return m ? Math.round(Number(m[1]) * (m[2] ? 10000 : 1)) : 0;
     })(),
-    img: pick(raw, ['goods_thumbnail_url', 'goods_image_url', 'goodsImageUrl']) || '',
+    /* ⚠ 键名必须是 `image`（前端 `renderShopLive` 读的是 `it.image`），
+       以前回的是 `img` —— 键名对不上，图片永远取不到且不报错（2026-10-09 修）。
+       字段名本来是对的（`goods_thumbnail_url`），补的是协议相对地址那一环。 */
+    image: absoluteImage(pick(raw, ['goods_thumbnail_url', 'goods_image_url', 'goodsImageUrl', 'goods_thumb_url']) || ''),
     commissionRate: pick(raw, ['promotion_rate', 'promotionRate']) || null
   };
 }
