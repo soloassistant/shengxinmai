@@ -13,6 +13,14 @@
      node tools/check-keys.js                      # 全查
      node tools/check-keys.js --only=ignav         # 只查一个
      node tools/check-keys.js --q=耳机              # 换关键词（默认「耳机」）
+     node tools/check-keys.js --shape              # ★ 不需要任何密钥：验证「请求形状」
+
+   --shape 干什么：用**假凭据**让适配器自己去打真实端点，看上游的拒绝停在哪一步。
+     · 停在「凭据无效」（appkey不存在 / Invalid app_key / clientId不正确 / invalid_api_key）
+       → 参数名、签名位置、编码方式**已经被上游接受了**，缺的只是真凭据；
+     · 停在「公共参数错误 / 签名错误 / 缺少参数」 → 形状不对，这时拿到真 key 也白搭。
+   这一步能在**还没注册任何账号之前**把四家全验一遍。用的是假凭据，不消耗任何人的额度
+   （ignav 只对 HTTP 200 计费，401 不计）。
 
    退出码：0 = 已配置的都通了；1 = 有已配置的数据源报错（可直接进 CI）。
    未配置的数据源**不算失败** —— 没填 key 是合法状态，不是错误。
@@ -49,8 +57,11 @@ const mask = (v) => {
 
 const say = (s) => process.stdout.write(s + '\n');
 
-say('省心买 · 密钥自检    关键词「' + Q + '」');
-say('='.repeat(64));
+/* 表头只在正常模式打；--shape 有自己的表头（两个都打会出现两行标题） */
+if (!argv.includes('--shape')) {
+  say('省心买 · 密钥自检    关键词「' + Q + '」');
+  say('='.repeat(64));
+}
 
 /* 每一项：名称 / 需要的 env 键 / 怎么查一次 / 成功时怎么描述结果 */
 const SOURCES = [
@@ -59,6 +70,7 @@ const SOURCES = [
     name: '淘宝 / 天猫（大淘客）',
     keys: ['DATAOKE_APP_KEY', 'DATAOKE_APP_SECRET'],
     run: () => dataoke.search(Q, process.env),
+    runShape: () => dataoke.search(Q, SHAPE_FAKE),
     pick: (r) => (r.items[0] ? r.items[0].title + ' ¥' + r.items[0].final : '')
   },
   {
@@ -66,6 +78,7 @@ const SOURCES = [
     name: '京东（京东联盟）',
     keys: ['JD_UNION_APP_KEY', 'JD_UNION_APP_SECRET'],
     run: () => jd.search(Q, process.env),
+    runShape: () => jd.search(Q, SHAPE_FAKE),
     pick: (r) => (r.items[0] ? r.items[0].title + ' ¥' + r.items[0].final : '')
   },
   {
@@ -73,6 +86,7 @@ const SOURCES = [
     name: '拼多多（多多进宝）',
     keys: ['PDD_CLIENT_ID', 'PDD_CLIENT_SECRET'],
     run: () => pdd.search(Q, process.env),
+    runShape: () => pdd.search(Q, SHAPE_FAKE),
     pick: (r) => (r.items[0] ? r.items[0].title + ' ¥' + r.items[0].final : '')
   },
   {
@@ -84,11 +98,89 @@ const SOURCES = [
       const d = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
       return ignav.searchRoute({ from: 'BJS', to: 'CAN', date: d }, process.env);
     },
+    runShape: () => {
+      const d = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
+      return ignav.searchRoute({ from: 'BJS', to: 'CAN', date: d }, SHAPE_FAKE);
+    },
     pick: (r) => (r.items[0] ? r.items[0].carrier + ' ¥' + r.items[0].price : '')
   }
 ];
 
+/* ==========================================================================
+   --shape 模式：不需要任何密钥，验证「我们发的请求形状」对不对
+   --------------------------------------------------------------------------
+   为什么这个模式值得单独存在：**拿到 key 之前没人愿意去注册四个账号**，
+   于是"形状对不对"这件事被一路推到真正接线的那天 —— 而那天一旦发现签名/参数不对，
+   排查成本最高（分不清是 key 错还是我们的请求错）。
+   用假凭据先打一遍，就能把"形状"这一层先排掉。
+   ========================================================================== */
+const SHAPE_FAKE = {
+  DATAOKE_APP_KEY: 'SXM_SHAPE_PROBE', DATAOKE_APP_SECRET: 'SXM_SHAPE_PROBE',
+  JD_UNION_APP_KEY: 'SXM_SHAPE_PROBE', JD_UNION_APP_SECRET: 'SXM_SHAPE_PROBE',
+  PDD_CLIENT_ID: 'SXM_SHAPE_PROBE', PDD_CLIENT_SECRET: 'SXM_SHAPE_PROBE',
+  IGNAV_API_KEY: 'SXM_SHAPE_PROBE'
+};
+
+/* 上游的拒绝停在哪一步 —— 这是全部判据所在：
+   停在「凭据」= 参数名/签名位置/编码都被接受了；停在「参数/签名」= 我们发错了东西。 */
+const CRED_RE   = /appkey|app_key|client_?id|client ?id|client下线|api_?key|未授权|授权|无效|不存在|invalid|Unauthorized/i;
+const PARAM_RE  = /公共参数|参数错误|缺少|必填|必须|签名|sign|timestamp|格式|frequency|频率|非法/i;
+
+function classify(note) {
+  const s = String(note || '');
+  if (PARAM_RE.test(s) && !/无效|不存在|不正确/.test(s)) return 'param';
+  if (CRED_RE.test(s)) return 'cred';
+  return 'unknown';
+}
+
+async function shapeMode() {
+  say('省心买 · 请求形状自检（不需要任何密钥，用的是假凭据）');
+  say('='.repeat(64));
+  say('判据：上游的拒绝停在哪一步。停在「凭据」= 形状对；停在「参数/签名」= 形状不对。');
+  let bad = 0;
+
+  for (const s of SOURCES) {
+    if (ONLY && ONLY !== s.id) continue;
+    say('');
+    say('▌ ' + s.name);
+    const t0 = Date.now();
+    let r;
+    try {
+      r = await s.runShape();
+    } catch (e) {
+      bad++;
+      say('    ❌ 适配器抛异常：' + String((e && e.message) || e));
+      continue;
+    }
+    const ms = Date.now() - t0;
+    if ((r.items || []).length > 0) {
+      say('    ⚠️  居然拿到了真数据（' + ms + 'ms）—— 上游没拦住假凭据，这本身要查。');
+      continue;
+    }
+    const kind = classify(r.note);
+    if (kind === 'cred') {
+      say('    ✅ 形状正确：上游过了参数校验，停在凭据上（' + ms + 'ms）');
+    } else if (kind === 'param') {
+      bad++;
+      say('    ❌ 形状有问题：上游报的是参数/签名错（' + ms + 'ms）');
+    } else {
+      say('    ⚠️  没能归类，请人看一眼（' + ms + 'ms）');
+    }
+    say('       上游原话：' + (r.note || '(空)'));
+    if (r.rawSample) say('       原始字段：' + JSON.stringify(r.rawSample));
+  }
+
+  say('');
+  say('='.repeat(64));
+  if (bad) say(bad + ' 家的请求形状没通过 —— 拿到真 key 之前先把这里修好，否则真 key 也是白搭。');
+  else say('全部通过：参数名、签名位置、编码方式都已被上游接受，缺的只是真凭据。');
+  say('（本次用的是假凭据，没有消耗任何额度。）');
+  process.exit(bad ? 1 : 0);
+}
+
 (async () => {
+  if (argv.includes('--shape')) return shapeMode();
+
   let configured = 0, failed = 0;
 
   for (const s of SOURCES) {
