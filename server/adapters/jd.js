@@ -114,8 +114,28 @@ module.exports = {
       .join('&');
 
     const res = await fetchJsonRetry(ENDPOINT + '?' + qs, { timeout: 9000, retries: 1 });
-    if (!res.ok && !res.json) return { items: [], note: `请求失败（HTTP ${res.status}）：${res.text}` };
 
+    /* ⚠ 这里原来是 `if (!res.ok && !res.json)` —— 和 2026-10-08 在大淘客 / 机票
+       两家修掉的是**同一族死分支**：`fetchJson` 里的 `json` 是解析后的对象，
+       **body 是合法 JSON 时恒为真值，与 HTTP 状态无关** ⇒ `!res.json` 恒为 false
+       ⇒ 这个分支只在「非 200 且 body 不是 JSON」时才成立。
+       于是「非 200 但 body 是 JSON」这条路会一路掉到下面的 `unwrap()`，
+       返回 null 后被报成「没找到 jd_union_open_goods_query_responce 节点，
+       响应壳可能变了」—— 把一次 HTTP 403 / 429 说成"壳变了"，
+       正是 `bd283f9` 那一轮认定的"最容易被带偏的假结论"。
+       ⚠ 与那两家不同：京东这个变体**没有在野观测到过**（京东的业务错走的是
+         HTTP 200 + error_response，下面那条能兜住，所以线上没暴露）。
+         这里改的是**结构性一致性**，不是实测缺陷 —— 别把它当成抓到的线上 bug。
+       写法与另外三家保持一致：先判 `!res.ok`，把 HTTP 状态和 body 里的
+       描述一起报出来。 */
+    if (!res.ok) {
+      const msg = (res.json && (res.json.error_response
+          ? (res.json.error_response.zh_desc || res.json.error_response.msg || res.json.error_response.error_msg)
+          : (res.json.msg || res.json.message)))
+        || res.text || '无描述';
+      const where = res.status === 0 ? '请求失败（网络层）' : `请求失败（HTTP ${res.status}）`;
+      return { items: [], note: `${where}：${msg}` };
+    }
     const body = res.json;
     if (!body) return { items: [], note: '返回不是 JSON：' + res.text };
     if (body.error_response) {

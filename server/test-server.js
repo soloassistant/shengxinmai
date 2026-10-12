@@ -356,15 +356,48 @@ check(dkBadKey.result.note.indexOf('没有推广商品') === -1,
 check(dkBadKey.calls.length === 1,
   '业务错误不重试（重试也治不好签名/key 的问题，只会白等），实际发了 ' + dkBadKey.calls.length + ' 次');
 
-// 大淘客正常路径：HTTP 200 + code:0 + 列表
+/* ---- 大淘客成功路径 ----
+   这个 fixture 2026-10-09 补厚过：原来只有 1 条、4 个字段，于是**商品图那条链
+   只被 `_normalizeOne` 单点覆盖，从没经过 `search()` 全链路**。补成多条、带上
+   `pic_url`（协议相对地址）之后，整条链才算真的被钉住。 */
 const dkOk = await withStubbedFetch(
   { status: 200, body: JSON.stringify({ code: 0, data: { list: [
-    { title: '测试耳机', originalPrice: 100, actualPrice: 80, couponPrice: 20, itemLink: 'https://x/1' }
+    { goodsId: '1234567890', title: '测试耳机 降噪版', dtitle: '【旗舰】测试耳机 降噪版',
+      originalPrice: 399, actualPrice: 359, couponPrice: 40,
+      pic_url: '//img.alicdn.com/imgextra/i1/abc.jpg',
+      itemLink: 'https://item.taobao.com/item.htm?id=1',
+      shopName: '测试数码旗舰店', monthSales: 2300, commissionRate: '9.00' },
+    // 第二条：只有 title 和 actualPrice，其余全缺 —— 兜底分支也要活
+    { title: '测试耳机 标准版', actualPrice: 199 }
   ] } }) },
   () => dataoke.search('耳机', dkEnv)
 );
-check(dkOk.result.items.length === 1 && dkOk.result.items[0].final === 80,
-  '大淘客正常路径不受影响：' + dkOk.result.items.length + ' 条，到手价 ' + (dkOk.result.items[0] || {}).final);
+const d0 = dkOk.result.items[0] || {};
+check(dkOk.result.items.length === 2 && d0.title === '测试耳机 降噪版',
+  '大淘客正常路径：' + dkOk.result.items.length + ' 条，首条「' + d0.title + '」');
+check(d0.final === 359 && d0.price === 399 && d0.coupon === 40,
+  '大淘客价格：actualPrice 本身就是券后价（359），原价 399、券 40，实际 '
+  + d0.price + '/' + d0.coupon + '/' + d0.final);
+check(d0.sku === '1234567890' && d0.url === 'https://item.taobao.com/item.htm?id=1'
+  && d0.shop === '测试数码旗舰店' && d0.sales === 2300 && d0.commissionRate === '9.00',
+  '大淘客字段：goodsId→sku、itemLink→url、店铺、月销、佣金率都取对了');
+check(d0.image === 'https://img.alicdn.com/imgextra/i1/abc.jpg',
+  '大淘客图：pic_url 的协议相对地址在全链路上被补成 https:，实际「' + d0.image + '」');
+const d1 = dkOk.result.items[1] || {};
+check(d1.final === 199 && d1.price === 199 && d1.coupon === 0
+  && d1.sku === '' && d1.url === '' && d1.shop === '' && d1.image === '',
+  '大淘客缺字段的那条不抛、不印 undefined：到手 199、无券、sku/链接/店铺/图全空，实际 '
+  + d1.final + '/' + JSON.stringify(d1.sku) + '/' + JSON.stringify(d1.url));
+
+/* extractList 的另一种壳：`data` 直接是数组（注释里说"两种都兜住"，得有判据） */
+const dkArray = await withStubbedFetch(
+  { status: 200, body: JSON.stringify({ code: 0, data: [
+    { title: '测试耳机', originalPrice: 100, actualPrice: 80, couponPrice: 20, itemLink: 'https://x/1' }
+  ] }) },
+  () => dataoke.search('耳机', dkEnv)
+);
+check(dkArray.result.items.length === 1 && dkArray.result.items[0].final === 80,
+  '大淘客 data 直接是数组的那种壳也能解析：' + dkArray.result.items.length + ' 条');
 
 // 大淘客业务错：HTTP 200 + code 非 0（这条原本就有，留着防回归）
 const dkBizErr = await withStubbedFetch(
@@ -392,6 +425,97 @@ check(jdErr.result.items.length === 0 && jdErr.result.note.indexOf('21') !== -1,
 check(jdErr.result.note.indexOf('没有推广商品') === -1,
   '⚠ 京东同样不把网关错说成「没有商品」');
 
+/* ---- 京东的 HTTP 层失败：`!res.ok && !res.json` 是死分支（与 bd283f9 同族）----
+   `fetchJson` 的 json 在 body 是合法 JSON 时恒为真值，与状态码无关，
+   所以旧写法只覆盖「非 200 且 body 非 JSON」。下面两条就是旧写法漏掉的：
+   它们原本会一路掉到 unwrap()→null，被报成「响应壳可能变了」。
+   ⚠ 这两条是**结构性一致性**修复的守卫，不是实测缺陷的复现 —— 京东在野的业务错
+     走 200 + error_response（上面那条），所以这个变体线上没暴露过。 */
+const jdHttpJson = await withStubbedFetch(
+  { status: 403, body: '{"msg":"rate limit exceeded"}' },
+  () => jd.search('耳机', { JD_UNION_APP_KEY: 'FAKE', JD_UNION_APP_SECRET: 'FAKE' })
+);
+check(jdHttpJson.result.note.indexOf('403') !== -1
+  && jdHttpJson.result.note.indexOf('响应壳') === -1,
+  '京东非 200 + JSON body 报的是 HTTP 状态，不伪装成「响应壳变了」，实际：' + jdHttpJson.result.note);
+
+const jdHttpHtml = await withStubbedFetch(
+  { status: 502, body: '<html>Bad Gateway</html>' },
+  () => jd.search('耳机', { JD_UNION_APP_KEY: 'FAKE', JD_UNION_APP_SECRET: 'FAKE' })
+);
+check(jdHttpHtml.result.note.indexOf('502') !== -1,
+  '京东非 200 + 非 JSON body 也报 HTTP 状态（旧写法唯一覆盖的那种），实际：' + jdHttpHtml.result.note);
+
+const jdHttpErrResp = await withStubbedFetch(
+  { status: 403, body: '{"error_response":{"code":"16","zh_desc":"IP 不在白名单"}}' },
+  () => jd.search('耳机', { JD_UNION_APP_KEY: 'FAKE', JD_UNION_APP_SECRET: 'FAKE' })
+);
+check(jdHttpErrResp.result.note.indexOf('IP 不在白名单') !== -1,
+  '京东非 200 + error_response 时把 zh_desc 带出来（不是只丢一句 HTTP 403），实际：' + jdHttpErrResp.result.note);
+
+/* ---- 京东成功路径（此前**完全没有**覆盖，填 key 那一刻才第一次执行）----
+   按代码期望的响应壳构造：外层 `jd_union_open_goods_query_responce`
+   （官方那个拼写错误的节点名），内层 queryResult 是**JSON 字符串**，要再解一次包。 */
+const jdOkBody = {
+  jd_union_open_goods_query_responce: {
+    queryResult: JSON.stringify({
+      code: 200,
+      data: [
+        {
+          skuId: '100012043978',
+          skuName: '测试耳机 降噪版',
+          priceInfo: { lowestPrice: '299.00', lowestCouponPrice: '279.00' },
+          couponInfo: { couponList: [{ discount: '20.00', quota: '299.00' }] },
+          materialUrl: 'https://u.jd.com/xxxxxx',
+          shopInfo: { shopName: '测试京东自营旗舰店' },
+          inOrderCount30Days: 5362,
+          imageInfo: { imageList: [{ url: '//img14.360buyimg.com/n1/jfs/t1/abc.jpg' }] },
+          commissionInfo: { commissionShare: '12.5' }
+        },
+        {
+          // 第二条故意什么都不给：券、图、店铺、佣金全缺 —— 兜底分支也要活
+          skuId: '100012043979',
+          skuName: '测试耳机 标准版',
+          priceInfo: { lowestPrice: '199.00' }
+        }
+      ]
+    })
+  }
+};
+const jdOk = await withStubbedFetch(
+  { status: 200, body: JSON.stringify(jdOkBody) },
+  () => jd.search('耳机', { JD_UNION_APP_KEY: 'FAKE', JD_UNION_APP_SECRET: 'FAKE' })
+);
+const j0 = jdOk.result.items[0] || {};
+check(jdOk.result.items.length === 2 && j0.title === '测试耳机 降噪版',
+  '京东成功路径：二次解包后取到 ' + jdOk.result.items.length + ' 条，首条「' + j0.title + '」');
+check(j0.final === 279 && j0.price === 299 && j0.coupon === 20,
+  '京东价格：券后优先用 lowestCouponPrice=279，券前 299，券 20，实际 '
+  + j0.price + '/' + j0.coupon + '/' + j0.final);
+check(j0.sku === '100012043978' && j0.url === 'https://u.jd.com/xxxxxx'
+  && j0.shop === '测试京东自营旗舰店' && j0.sales === 5362
+  && j0.commissionRate === '12.5',
+  '京东字段：sku/推广链接/店铺/月销/佣金率都取对了');
+check(j0.image === 'https://img14.360buyimg.com/n1/jfs/t1/abc.jpg',
+  '京东图：从嵌套的 imageInfo.imageList[0].url 取到，并补上 https: 前缀，实际「' + j0.image + '」');
+const j1 = jdOk.result.items[1] || {};
+check(j1.final === 199 && j1.coupon === 0 && j1.image === '' && j1.shop === '',
+  '京东缺字段的那条不抛、不印 undefined：券后 199、券 0、图空、店铺空，实际 '
+  + j1.final + '/' + j1.coupon + '/' + JSON.stringify(j1.image) + '/' + JSON.stringify(j1.shop));
+
+/* 京东「字段名变了」的自曝路径 —— 填 key 时最需要的一条：
+   上游真返回了数据但一条都解析不出来，必须说"字段名可能变了"并带上原始键名，
+   而不是静默报「该关键词没有推广商品」。 */
+const jdShifted = await withStubbedFetch(
+  { status: 200, body: JSON.stringify({ jd_union_open_goods_query_responce: {
+    queryResult: JSON.stringify({ code: 200, data: [{ 商品名: 'x', 价格: 1 }] }) } }) },
+  () => jd.search('耳机', { JD_UNION_APP_KEY: 'FAKE', JD_UNION_APP_SECRET: 'FAKE' })
+);
+check(jdShifted.result.note.indexOf('字段名') !== -1
+  && (jdShifted.result.rawSample || []).join(',').indexOf('商品名') !== -1,
+  '京东解析到 0 条时会自曝并把原始键名带回来，实际：' + jdShifted.result.note
+  + ' 原始字段=' + (jdShifted.result.rawSample || []).join(','));
+
 // 拼多多：实测 HTTP 200 + error_response（公共参数错误也是这样来的）
 const pddErr = await withStubbedFetch(
   { status: 200, body: '{"error_response":{"error_msg":"公共参数错误:timestamp","error_code":10001}}' },
@@ -399,6 +523,65 @@ const pddErr = await withStubbedFetch(
 );
 check(pddErr.result.items.length === 0 && pddErr.result.note.indexOf('10001') !== -1,
   '拼多多网关错（HTTP 200 带 error_response）被抓到并报出来，实际：' + pddErr.result.note);
+
+/* ---- 拼多多成功路径（此前**完全没有**覆盖）----
+   按代码期望的壳构造：外层 goods_search_response，内层 goods_list。
+   拼多多全部按「分」计价，所以 15900 分 = 159 元。 */
+const pddOkBody = {
+  goods_search_response: {
+    goods_list: [
+      {
+        goods_id: '33445566',
+        goods_name: '测试耳机 无线充电版',
+        min_group_price: 15900,        // 分 → 159.00
+        min_normal_price: 19900,       // 分 → 199.00
+        coupon_discount: 2000,         // 分 → 20.00
+        goods_url: '',                 // 故意空 → 触发 goods_id 兜底链接
+        mall_name: '测试数码专营店',
+        sales_tip: '1.2万',             // 文案不是数字，要解析成 12000
+        goods_thumbnail_url: '//img.pddpic.com/garner/abc.jpg',
+        promotion_rate: 800
+      },
+      {
+        // 第二条：sales 是数字而非文案、没有券、图给的是 https
+        goods_id: '33445567',
+        goods_name: '测试耳机 有线版',
+        min_group_price: 9900,
+        min_normal_price: 9900,
+        sales: 356,
+        goods_thumbnail_url: 'https://img.pddpic.com/def.jpg'
+      }
+    ]
+  }
+};
+const pddOk = await withStubbedFetch(
+  { status: 200, body: JSON.stringify(pddOkBody) },
+  () => pdd.search('耳机', { PDD_CLIENT_ID: 'FAKE', PDD_CLIENT_SECRET: 'FAKE' })
+);
+const p0 = pddOk.result.items[0] || {};
+check(pddOk.result.items.length === 2 && p0.title === '测试耳机 无线充电版',
+  '拼多多成功路径：取到 ' + pddOk.result.items.length + ' 条，首条「' + p0.title + '」');
+check(p0.final === 139 && p0.price === 199 && p0.coupon === 20,
+  '拼多多价格：全部按「分」换算 —— 拼团 159 − 券 20 = 到手 139，单买 199，实际 '
+  + p0.price + '/' + p0.coupon + '/' + p0.final);
+check(p0.sales === 12000,
+  '拼多多销量文案「1.2万」解析成 12000（不是 1.2 也不是 0），实际 ' + p0.sales);
+check(p0.url === 'https://mobile.yangkeduo.com/goods.html?goods_id=33445566',
+  '拼多多 goods_url 为空时用 goods_id 兜出商品页链接，实际 ' + p0.url);
+check(p0.image === 'https://img.pddpic.com/garner/abc.jpg',
+  '拼多多图：goods_thumbnail_url 的协议相对地址补上 https:，实际「' + p0.image + '」');
+const p1 = pddOk.result.items[1] || {};
+check(p1.final === 99 && p1.coupon === 0 && p1.sales === 356 && p1.image === 'https://img.pddpic.com/def.jpg',
+  '拼多多无券那条：到手 99、券 0、数字销量 356、https 图原样保留，实际 '
+  + p1.final + '/' + p1.coupon + '/' + p1.sales);
+
+/* 拼多多「字段名变了」的自曝路径 */
+const pddShifted = await withStubbedFetch(
+  { status: 200, body: JSON.stringify({ goods_search_response: { goods_list: [{ 商品名: 'x' }] } }) },
+  () => pdd.search('耳机', { PDD_CLIENT_ID: 'FAKE', PDD_CLIENT_SECRET: 'FAKE' })
+);
+check(pddShifted.result.note.indexOf('字段名') !== -1,
+  '拼多多解析到 0 条时会自曝「字段名可能变了」，实际：' + pddShifted.result.note);
 
 // ignav：实测 HTTP 401 + error.code=invalid_api_key
 const igErr = await withStubbedFetch(

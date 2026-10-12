@@ -700,7 +700,7 @@
         watchRemove(w.qKey, w.platform);
         watchAdd({ q: w.q, platform: w.platform, sku: w.sku, title: w.title, price: p.lowest.final });
         return `<div class="banner banner-ok watch-banner"><span class="banner-ico">↓</span>
-          <span>降价提醒：「${esc(w.q)}」在${esc(p.name)}从 ¥${fmtPrice(w.price)}
+          <span>降价提醒：「${esc(w.q || '')}」在${esc(p.name || '')}从 ¥${fmtPrice(w.price)}
           降到 <b>¥${fmtPrice(p.lowest.final)}</b>，比上次记录便宜 ¥${fmtPrice(drop.saved)}。</span></div>`;
       }).join('');
     }
@@ -714,20 +714,25 @@
         return `
           <div class="live-group">
             <div class="live-head">
-              <span class="live-plat">${esc(p.name)}</span>
+              <span class="live-plat">${esc(p.name || '')}</span>
               <span class="live-low">没拿到</span>
             </div>
             <div class="live-empty">${esc(p.note || '该关键词没有推广商品')}${detail}</div>
           </div>`;
       }
 
-      /* 关注按钮只在真实数据上出现：演示价格是编的，关注它等于记假账 */
+      /* 关注按钮只在真实数据上出现：演示价格是编的，关注它等于记假账。
+         下面 data-price 与旁边两个 `(p.lowest && p.lowest.x) || ''` 保持一致的兜底：
+         服务端 `count` 与 `lowest` 同源推导，所以 count>0 时 lowest 必然在；
+         但**三个访问点里两个带兜底、一个不带**，这种不一致本身就是隐患 ——
+         契约一改，先炸的就是那个不带兜底的。（注释必须写在模板字符串外面，
+         写在里面它会变成字面量被拼进 HTML。） */
       const watchBtn = !isDemo ? `
         <button class="watch-btn" type="button" data-watch="1"
-          data-q="${esc(product)}" data-platform="${esc(p.id)}" data-plat-name="${esc(p.name)}"
+          data-q="${esc(product)}" data-platform="${esc(p.id || '')}" data-plat-name="${esc(p.name || '')}"
           data-sku="${esc((p.lowest && p.lowest.sku) || '')}"
           data-title="${esc((p.lowest && p.lowest.title) || '')}"
-          data-price="${esc(String(p.lowest.final))}">关注降价</button>` : '';
+          data-price="${esc(String((p.lowest && p.lowest.final) || ''))}">关注降价</button>` : '';
 
       /* 缩略图占掉原本平台图标那一列：平台名已经写在上面的 .live-plat 里，
          行内不必再放一遍平台图标。有图走默认三列，没图才收成两列。 */
@@ -777,7 +782,7 @@
       return `
         <div class="live-group">
           <div class="live-head">
-            <span class="live-plat">${esc(p.name)}</span>
+            <span class="live-plat">${esc(p.name || '')}</span>
             <span class="live-low">最低 <b>¥${fmtPrice(p.lowest.final)}</b>${more}</span>
             ${watchBtn}
           </div>
@@ -796,7 +801,7 @@
        用同一个惯用法兜住。 */
     const idle = (data.unconfigured || []).length
       ? `<div class="live-empty" style="margin-top:12px">这些平台还没配密钥，配上就会一起比进来：${
-          (data.unconfigured || []).map((u) => esc(u.name)).join('、')
+          (data.unconfigured || []).map((u) => esc(u.name || '')).join('、')
         }</div>`
       : '';
 
@@ -809,7 +814,7 @@
            只为让你看到接入联盟接口后的完整形态，<strong>不能当报价用</strong>。
            去「接入状态」关掉效果预览即可恢复。</span></div>`
       : `<div class="banner banner-warn"><span class="banner-ico">!</span>
-           <span>${esc(data.disclaimer)}</span></div>`;
+           <span>${esc(data.disclaimer || '')}</span></div>`;
 
     return `
       <div class="card-head">
@@ -860,7 +865,7 @@
          那是编出来的数字。整行不画比画一个假 0 诚实。 */
       if (data.split) {
         const who = (data.split.platforms || [])
-          .map((p) => esc(p.name) + ' ¥' + fmtPrice(p.subtotal)).join('　');
+          .map((p) => esc(p.name || '') + ' ¥' + fmtPrice(p.subtotal)).join('　');
         planRows.push(`
           <div class="plan-row ${isSplit ? 'pick' : ''}">
             <div>
@@ -876,7 +881,7 @@
         planRows.push(`
           <div class="plan-row ${pick ? 'pick' : ''}">
             <div>
-              <div class="plan-name">都在「${esc(s.name)}」买齐${pick ? ' <span class="badge badge-best">建议</span>' : ''}</div>
+              <div class="plan-name">都在「${esc(s.name || '')}」买齐${pick ? ' <span class="badge badge-best">建议</span>' : ''}</div>
               <div class="plan-meta">只开 1 个 App，少在 ${Math.max(0, items.length - 1)} 个地方填地址</div>
             </div>
             <div class="plan-total">${money(s.total)}</div>
@@ -893,9 +898,9 @@
     const detail = items.map((it, i) => {
       const pq = perQ[i] || {};
       if (!it.best) {
-        return `<div class="basket-item">
+        return `        <div class="basket-item">
           <div>
-            <div class="bi-q">${esc(it.q)}</div>
+            <div class="bi-q">${esc(it.q || '')}</div>
             <div class="bi-sub">这件没拿到价格${pq.error ? '（' + esc(pq.error) + '）' : ''}，没有算进总价</div>
           </div>
           <div class="bi-right"><div class="price-na">—</div></div>
@@ -912,7 +917,7 @@
         : '';
       return `<div class="basket-item">
         <div>
-          <div class="bi-q">${esc(it.q)}</div>
+          <div class="bi-q">${esc(it.q || '')}</div>
           <div class="bi-sub">最便宜在「${esc(it.best.name)}」${runner}</div>
         </div>
         <div class="bi-right">
@@ -929,7 +934,7 @@
 
     const failed = (data.failed || []).length
       ? `<div class="live-empty" style="margin-top:16px">这 ${
-          data.failed.length} 件没问通，其余照常算了：${data.failed.map((f) => esc(f.q)).join('、')}</div>`
+          data.failed.length} 件没问通，其余照常算了：${data.failed.map((f) => esc(f.q || '')).join('、')}</div>`
       : '';
 
     return `

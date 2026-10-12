@@ -1726,6 +1726,84 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   chk(/\.row-img\s*\{/.test(cssSrc), '（静态结构）.row-img 在样式表里有定义（缩略图那一列）');
   chk(/\.row-img-ph\s*\{/.test(cssSrc), '（静态结构）.row-img-ph 首字占位块也有定义');
 
+  /* ========================================================================
+     §6.2 收尾：字段缺失时不许在页面上印出字面量 undefined
+     ------------------------------------------------------------------------
+     2026-10-12。外部审计 §6.2 列了 13 处「服务端字段被裸访问」，其中只有
+     `data.unconfigured.length` 会抛（已由 e561eb4 修）。其余最坏只是在页面上
+     印出字面量 `undefined` —— 不崩，但「最便宜在 undefined 买齐」比没有这一行更糟。
+
+     ⚠ 诚实的定位：这 12 处**不是活缺陷**。服务端 `base = {id,name,platform}`、
+     basket 的 `best.name` / `runnerUp.name` 都保证存在。它们是**防契约漂移**的加固 ——
+     哪天服务端改了字段而忘了前端，症状会从"崩"降级成"印 undefined"，那更难发现。
+     所以判据打在**渲染结果**上：喂一个缺字段的 payload，断言输出里没有 undefined。
+     ======================================================================== */
+  say('\n— §6.2：字段缺失时不印字面量 undefined —');
+
+  /* 降价提醒那条路要先用 localStorage 放一条关注记录才走得到。
+     故意让这条记录**缺 q** —— 这正是 `esc(w.q)` 唯一的真实风险来源
+     （关注记录来自本机存储，不像服务端字段有保证）。 */
+  const WATCH_KEY = 'sxm.watch';
+  sandbox.localStorage.setItem(WATCH_KEY, JSON.stringify([
+    { qKey: '耳机', platform: 'jd', price: 199, sku: 's1', title: 'x' }   // ← 没有 q
+  ]));
+
+  const liveMiss = SXM.renderShopLive('耳机', {
+    platforms: [
+      { id: 'jd', name: '京东', ok: true, count: 1,
+        lowest: { final: 99, sku: 's1', title: '测试耳机', history: null },
+        items: [{ title: '测试耳机', final: 99, image: '', url: '' }] },
+      /* name 缺失：服务端 base 保证有 name，这里模拟契约漂移 */
+      { id: 'pdd', ok: true, count: 1,
+        lowest: { final: 88, sku: 's2', title: '测试耳机2', history: null },
+        items: [{ title: '测试耳机2', final: 88, image: '', url: '' }] },
+      /* 出错平台：lowest 为 null（服务端确实会这么给，见 adapters/index.js:64） */
+      { id: 'dataoke', name: '淘宝 / 天猫', ok: false, count: 0, lowest: null, items: [],
+        note: '网关报错 21：key 无效', rawSample: null },
+    ],
+    /* unconfigured 项缺 name */
+    unconfigured: [{ id: 'haodanku', envKeys: ['X'], doc: '' }],
+    disclaimer: null,
+  });
+  chk(liveMiss.indexOf('undefined') === -1,
+    '比价卡：平台名 / 商品名 / 关注记录 / 免责说明缺失时，输出里不出现字面量 undefined');
+  chk(liveMiss.indexOf('降价提醒') !== -1,
+    '比价卡：缺 q 的关注记录照样能出降价提醒（不因为字段缺就整条不画）');
+  chk(liveMiss.indexOf('这些平台还没配密钥') !== -1,
+    '比价卡：unconfigured 项缺 name 时提示照出（空名字也不该让整行消失）');
+  sandbox.localStorage.removeItem(WATCH_KEY);
+
+  const basketMiss = SXM.renderBasket({
+    recommend: 'split',
+    items: [
+      { q: '耳机', best: { platform: 'jd', name: null, final: 99 }, runnerUp: null, gapToRunnerUp: 0 },
+      { q: null, best: { platform: 'pdd', name: '拼多多', final: 88 }, runnerUp: null, gapToRunnerUp: 0 },
+    ],
+    split: { total: 187, platformCount: 2,
+      platforms: [{ platform: 'jd', name: null, subtotal: 99 }, { platform: 'pdd', subtotal: 88 }] },
+    singles: [{ platform: 'jd', name: null, total: 187 }],
+    failed: [{ q: null }],
+    notes: [],
+  });
+  chk(basketMiss.indexOf('undefined') === -1,
+    '清单卡：平台名 / 商品名 / 失败条目缺字段时，输出里不出现字面量 undefined');
+  chk(basketMiss.indexOf('分件买最优') !== -1 && basketMiss.indexOf('187') !== -1,
+    '清单卡：缺 name 的分件方案行照常画出，总价数字还在');
+
+  /* 反向：字段齐全时必须一切正常 —— 否则上面两条可能是"整张卡没渲染"换来的假绿 */
+  const liveFull = SXM.renderShopLive('耳机', {
+    platforms: [
+      { id: 'jd', name: '京东', ok: true, count: 1,
+        lowest: { final: 99, sku: 's1', title: '测试耳机', history: null },
+        items: [{ title: '测试耳机', final: 99, image: 'https://img.jd.com/a.jpg', url: 'https://item.jd.com/1.html' }] },
+    ],
+    unconfigured: [{ id: 'pdd', name: '拼多多', envKeys: ['X'], doc: '' }],
+    disclaimer: '各家联盟只返回已设佣的商品',
+  });
+  chk(liveFull.indexOf('京东') !== -1 && liveFull.indexOf('99') !== -1
+    && liveFull.indexOf('undefined') === -1,
+    '比价卡：字段齐全时正常渲染（证明上面不是"整张卡没画"换来的假绿）');
+
   say(`\n结果：${pass} 通过 / ${fail} 失败`);
   flush();
   process.exit(fail ? 1 : 0);
