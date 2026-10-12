@@ -65,12 +65,41 @@ function createMetrics({ startedAt = Date.now() } = {}) {
     };
   }
 
+  /* 对外投影：只保留前端「服务端统计」那一块真正消费的字段。
+     ------------------------------------------------------------------
+     `/api/metrics` 是**公开**端点，没有任何鉴权。而 snapshot() 原样带出去的东西里，
+     抽屉一个都不用，却全是白送的情报：
+
+       · `store.file`              部署内的绝对路径（/.data/prices.jsonl）
+       · `rateLimit` `basketRateLimit`
+                                   限流容量与补充速率 —— 攻击者据此能把 flood
+                                   调到「刚好不被拒」，等于把闸门参数送出去
+       · `cache`                   缓存规格与命中率，勾勒内部实现
+       · `paths`                   逐路径调用量，还原流量结构与业务规模
+       · `adapters`                哪几家配了密钥 —— 枚举攻击面
+       · `uptimeMs`                精确到进程启动时刻，辅助指纹识别
+
+     线上实测（2026-10-12）：/api/metrics 200、1118~1351 B，上面每一样都在。
+     修法不是「给端点加锁」—— 前端要无鉴权地读它；而是**按消费面收窄产出**。
+     判据：抽屉消费什么，这里就给什么，别的都不给。
+     ------------------------------------------------------------------ */
+  function snapshotPublic() {
+    const s = snapshot();
+    return {
+      requests: s.requests,
+      errors: s.errors,
+      rateLimited: s.rateLimited,
+      avgMs: s.avgMs,
+      platforms: s.platforms
+    };
+  }
+
   function reset() {
     requests = 0; errors = 0; rateLimited = 0; totalMs = 0;
     byPath.clear(); byPlatform.clear();
   }
 
-  return { request, limited, platform, snapshot, reset };
+  return { request, limited, platform, snapshot, snapshotPublic, reset };
 }
 
 module.exports = { createMetrics };

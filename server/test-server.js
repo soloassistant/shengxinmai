@@ -736,6 +736,30 @@ say('\n— 聚合并发 —');
       check(cmp.unconfigured.length === 3, '无密钥时三个平台都列在 unconfigured 里');
       check(cmp.platforms.length === 0, '无密钥时不返回任何平台结果——不编数据');
 
+      /* ---- /api/metrics 的产出面：公开端点只给消费面（2026-10-12） ----
+         这个端点**没有鉴权**（前端抽屉要无鉴权读它），原来却把 snapshot({...})
+         连着 cache / rateLimit / basketRateLimit / store / adapters 原样吐出：
+         store.file 是部署内的绝对路径；限流容量与补充速率等于把闸门参数送出去，
+         攻击者能据此把 flood 调到刚好不被拒；adapters 暴露哪几家配了密钥。
+         线上实测过 body 里每一样都在。而抽屉一个都不消费它们。
+         修法不是给端点加锁（锁了前端就读不到），而是**按消费面收窄产出**。
+         逐项验两件事：白送的不在、该留的还在。 */
+      const metRes = await fetch(base + '/api/metrics');
+      check(metRes.status === 200, '/api/metrics 返回 200');
+      const met = metRes.status === 200 ? await metRes.json() : {};
+      const metLeaked = ['file', 'rateLimit', 'basketRateLimit', 'cache', 'paths', 'adapters', 'uptimeMs']
+        .filter((k) => k in met);
+      check(metLeaked.length === 0,
+        '公开的 /api/metrics 不含内部情报字段（file / rateLimit / basketRateLimit / cache / paths / adapters / uptimeMs 均无）'
+        + (metLeaked.length ? '，仍在泄露：' + metLeaked.join('、') : ''));
+      check(!JSON.stringify(met).includes('.jsonl'),
+        '响应体里不出现价格库文件路径（.jsonl 不在 body 里）');
+      check(met.ok === true
+        && typeof met.requests === 'number' && typeof met.errors === 'number'
+        && typeof met.rateLimited === 'number' && typeof met.avgMs === 'number'
+        && Array.isArray(met.platforms),
+        '/api/metrics 仍带齐抽屉真正消费的 5 个字段（ok / requests / errors / rateLimited / avgMs / platforms）');
+
       const page = await fetch(base + '/');
       const html = await page.text();
       check(page.ok && html.includes('省心买'), '根路径能正常返回页面');

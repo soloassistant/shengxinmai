@@ -1804,6 +1804,104 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
     && liveFull.indexOf('undefined') === -1,
     '比价卡：字段齐全时正常渲染（证明上面不是"整张卡没画"换来的假绿）');
 
+  /* ========================================================================
+     /api/metrics 契约：服务端投影 ↔ 前端抽屉消费，两边钉在一起（2026-10-12）
+     ------------------------------------------------------------------------
+     这个端点**无鉴权公开**，原来把 cache / store / paths / rateLimit / adapters
+     一起原样吐出：部署内绝对路径、限流容量与补充速率、逐路径流量、
+     哪几家配了密钥 —— 白送的情报。服务端已改成按消费面收窄
+     （snapshotPublic() 只给 5 个字段），server 套件盯住"白送的不在"、
+     quality 套件盯住"键的集合正好是这 5 个"。
+
+     但那只守住了**产出**一侧。契约的另一半是消费：哪天有人从投影里删掉
+     `platforms`，server 测试会红；可前端抽屉少画一块是**静默**的 ——
+     parse 这套件从来没喂过带内容的 metrics 响应（1151 行那个桩 platforms
+     是空数组），照样全绿。商品图那条缺陷链（适配器回 img、前端读 it.image、
+     两边各自的测试都绿）就是这么漏过去的。
+
+     所以这里换一个**有内容**的桩，驱动 probeHealth → openDrawer → loadMetrics
+     这条真路径，断言抽屉真的把投影字段画了出来。
+     ======================================================================== */
+  say('\n— /api/metrics 契约：投影字段 → 抽屉真的画出来 —');
+
+  /* 形状从 server/lib/metrics.js 的 snapshotPublic() 抠出来，不在这边重抄想象 */
+  const METRICS_FULL = {
+    ok: true,
+    requests: 7, errors: 1, rateLimited: 2, avgMs: 42,
+    platforms: [
+      { id: 'jd', calls: 2, ok: 1, fail: 1, totalMs: 200, avgMs: 100, successRate: 0.5 },
+    ],
+  };
+  /* 收窄**之前**的形状：内部字段全都还在。喂它是要证明
+     "前端不依赖这些字段" —— 服务端收窄产出不会打破任何东西。 */
+  const METRICS_LEGACY = Object.assign({}, METRICS_FULL, {
+    uptimeMs: 123456,
+    paths: [{ path: '/api/compare', count: 3, errors: 0, totalMs: 90, avgMs: 30 }],
+    cache: { hits: 1, misses: 2, size: 1, ttlMs: 60000 },
+    rateLimit: { capacity: 60, refillPerSec: 1 },
+    store: { skus: 1, points: 1, appended: 1, badLines: 0, maxPointsPerSku: 200,
+             file: '/workspace/.data/prices.jsonl' },
+    adapters: [{ id: 'dataoke', configured: true }],
+  });
+
+  let metricsHits = 0;
+  let metricsPayload = METRICS_FULL;
+  sandbox.fetch = async (url) => {
+    const u = String(url);
+    if (u.indexOf('/api/metrics') !== -1) {
+      metricsHits++;
+      return { ok: true, json: async () => metricsPayload };
+    }
+    if (u.indexOf('/api/health') !== -1) {
+      return { ok: true, json: async () => HEALTH };
+    }
+    return { ok: false, status: 404, json: async () => null };
+  };
+  await SXM.probeHealth();
+  /* 没有这一条，后面全条链路压根不会跑（openDrawer 只在 SERVER_OK=true 时
+     调 loadMetrics），而"没跑"和"跑了但没画出来"在断言上长得不一样 ——
+     先把它钉住，假红就能当场分辨。 */
+  chk(SXM.serverOk === true, '探测成功（SERVER_OK=true），否则 loadMetrics 不会被调用');
+
+  const metricsDrawerHtml = () => sandbox.document.getElementById('drawer-body').innerHTML;
+  const tick = () => new Promise((r) => setTimeout(r, 0));   // 宿主 setTimeout，冲刷微任务
+
+  SXM.openDrawer();
+  await tick();
+  await tick();                       // loadMetrics 是 fire-and-forget，等它落盘
+  const mHtml = metricsDrawerHtml();
+  chk(metricsHits >= 1, '打开抽屉真的打了 /api/metrics（' + metricsHits + ' 次）');
+  chk(mHtml.indexOf('服务端统计') !== -1, '抽屉里出现了「服务端统计」块');
+  chk(mHtml.indexOf('请求 7 次') !== -1, '投影的 requests 被画出来（请求 7 次）');
+  chk(mHtml.indexOf('京东') !== -1 && mHtml.indexOf('50%') !== -1,
+    '投影的 platforms 被画出来（京东 · 2 次 · 成功 50%）');
+  chk(mHtml.indexOf('undefined') === -1, '整块抽屉里不出现字面量 undefined');
+
+  /* 收窄前的全量形状：抽屉必须照常渲染，且内部路径一个字都不上屏。
+     这一条是"服务端收窄产出不会打破前端"的直接证据。 */
+  metricsPayload = METRICS_LEGACY;
+  SXM.closeDrawer();
+  SXM.openDrawer();
+  await tick();
+  await tick();
+  const legacyHtml = metricsDrawerHtml();
+  chk(legacyHtml.indexOf('服务端统计') !== -1 && legacyHtml.indexOf('请求 7 次') !== -1,
+    '喂收窄前的全量形状，抽屉照样画出服务端统计（前端不依赖那些内部字段）');
+  chk(legacyHtml.indexOf('/workspace') === -1,
+    '就算响应里带了内部路径，抽屉也不该把它渲染给用户看');
+
+  /* 缺 platforms 的残缺点：不崩、不印 undefined。
+     `(m.platforms || [])` 有兜底，这一条守的是"最坏也不印 undefined"。 */
+  metricsPayload = { ok: true, requests: 7, errors: 1, rateLimited: 2, avgMs: 42 };
+  SXM.closeDrawer();
+  SXM.openDrawer();
+  await tick();
+  await tick();
+  chk(metricsDrawerHtml().indexOf('undefined') === -1,
+    '投影缺 platforms 时抽屉不印 undefined（有兜底，不是裸访问）');
+
+  SXM.closeDrawer();
+
   say(`\n结果：${pass} 通过 / ${fail} 失败`);
   flush();
   process.exit(fail ? 1 : 0);

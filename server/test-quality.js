@@ -262,6 +262,21 @@ check(jdStat.calls === 2 && jdStat.successRate === 0.5,
 const cmpStat = snap.paths.find((p) => p.path === '/api/compare');
 check(cmpStat.count === 2 && cmpStat.errors === 1, '按接口分组的调用量与错误数正确');
 
+/* snapshotPublic：公开端点 /api/metrics 的产出面（2026-10-12）。
+   判据是**全集**：只允许这 5 个键。以后谁想往公开端点加字段，必须先过这一条、
+   先想清楚"抽屉真的消费它吗" —— 加不进去就是答案。
+   注意这里用的是**已经跑过平台调用**的 metrics 实例，所以 platforms 非空：
+   对着空数组断言"条目带齐字段"是恒真的，那才是假绿。 */
+const pub = mt.snapshotPublic();
+check(Object.keys(pub).sort().join(',') === 'avgMs,errors,platforms,rateLimited,requests',
+  'snapshotPublic 只输出 5 个键（avgMs/errors/platforms/rateLimited/requests），实际 '
+  + Object.keys(pub).sort().join(','));
+const pubJd = pub.platforms.find((p) => p.id === 'jd');
+check(pubJd && pubJd.calls === 2 && pubJd.successRate === 0.5 && typeof pubJd.avgMs === 'number',
+  '投影后平台条目仍带齐抽屉要的 id / calls / successRate / avgMs（京东 2 次、成功率 0.5）');
+check(!('paths' in pub) && !('uptimeMs' in pub) && !('store' in pub),
+  'snapshotPublic 不带 paths / uptimeMs / store —— 逐路径调用量、进程启动时刻、价格库路径都是白送的情报');
+
 /* ==========================================================================
    5.5 密钥文件装载（envfile）—— 真实数据接入的地基
    --------------------------------------------------------------------------
@@ -427,15 +442,23 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
       const hsBad = await httpGet(base + '/api/history');
       check(hsBad.status === 400, '历史接口缺参数返回 400');
 
-      /* ---- 指标接口 ---- */
+      /* ---- 指标接口：**公开**端点只给消费面（2026-10-12） ----
+         原来这里断言 msj.cache / msj.store / msj.paths 必须都在 ——
+         那等于把「内部状态能被无鉴权读走」当成功能在守，
+         测试自己成了暴露面的帮凶（和静态服务那条「README 必须 200」是同一种错）。
+         缓存命中数、按路径调用量、价格库规模这些观测并没有删：
+         它们在 metrics 单测段（snapshot 全量）里有断言，见上面「运行指标」。
+         这里改成盯住公开端点**不再**外泄。 */
       const msRes = await httpGet(base + '/api/metrics');
       const msj = await msRes.json();
-      check(msj.ok === true && !!msj.cache && !!msj.store, '/api/metrics 汇总了缓存与存储状态');
+      check(msRes.status === 200 && msj.ok === true,
+        '/api/metrics 公开可用（前端抽屉要无鉴权读它）');
       check(msj.requests >= 3, '指标里的请求数在累计（当前 ' + msj.requests + '）');
-      check(msj.cache.hits >= 1, '缓存命中数 > 0（' + msj.cache.hits + '）——缓存不是摆设');
-      check(msj.paths.some((p) => p.path === '/api/compare'),
-        '按接口分组的调用量出现了 /api/compare');
-      check(typeof msj.store.skus === 'number', '指标里能看到价格历史库规模（' + msj.store.skus + ' 个商品）');
+      check(!msj.cache && !msj.store && !msj.paths && !msj.rateLimit && !msj.adapters,
+        '公开的 /api/metrics 不再带 cache / store / paths / rateLimit / adapters'
+        + '（那些是内部情报：部署内绝对路径、限流参数、逐路径流量、密钥配置状态）');
+      check(!JSON.stringify(msj).includes('.jsonl'),
+        '指标响应体里不出现价格库文件路径（.jsonl）');
 
       /* ---- 静态资源不受限流影响 ---- */
       const page1 = await httpGet(base + '/');

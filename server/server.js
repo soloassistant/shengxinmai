@@ -385,17 +385,13 @@ async function api(req, res, p, url, rid) {
     }, rid);
   }
 
+  /* 运行指标：**公开**端点（前端抽屉要无鉴权地读），所以只给投影后的字段。
+     原来这里把 snapshot({...}) 连着 cache / rateLimit / store / adapters 一起
+     原样吐出 —— 那几样抽屉一个都不消费，却把内部路径、限流参数、密钥配置状态
+     白送出去。改成 snapshotPublic()：消费什么给什么，别的都不给。
+     顺带省掉一次 store.stats() 的 ensureLoaded() 磁盘读。 */
   if (p === '/api/metrics') {
-    return json(res, 200, {
-      ok: true,
-      ...metrics.snapshot({
-        cache: cache.stats(),
-        rateLimit: limiter.stats(),
-        basketRateLimit: basketLimiter.stats(),
-        store: store.stats(),
-        adapters: status(process.env).map((a) => ({ id: a.id, configured: a.configured }))
-      })
-    }, rid);
+    return json(res, 200, { ok: true, ...metrics.snapshotPublic() }, rid);
   }
 
   /* 机票：按航线查，返回按价格升序排好的航班表。
