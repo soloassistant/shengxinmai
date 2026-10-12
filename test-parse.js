@@ -9,6 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const crypto = require('crypto');
 
 /* Windows 控制台编码不可靠，同时写一份 UTF-8 日志文件 */
 const LOG = [];
@@ -1725,6 +1726,93 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   const cssSrc = fs.readFileSync(path.join(__dirname, 'styles.css'), 'utf8');
   chk(/\.row-img\s*\{/.test(cssSrc), '（静态结构）.row-img 在样式表里有定义（缩略图那一列）');
   chk(/\.row-img-ph\s*\{/.test(cssSrc), '（静态结构）.row-img-ph 首字占位块也有定义');
+
+  /* ========================================================================
+     CSP（2026-10-12）：第二条防线，且必须**可证伪**地钉住
+     ------------------------------------------------------------------------
+     这个页面的输入面比看上去大：对话内容、分享文本解析结果、以及**各平台
+     联盟接口回传的商品数据**（标题 / 店名 / 图片地址）全都会被拼进 innerHTML。
+     esc() 是第一条防线，CSP 是第二条 —— 万一哪漏了一个，它决定"最坏能发生什么"。
+
+     但 CSP 加错过一次就是全站白屏 / 图全裂 / 样式全丢，所以判据不是
+     "有个 CSP 字符串在"，而是四条能各自测红的：
+       ① script-src 不许出现 unsafe-inline / unsafe-eval（出现任一个这条防线就废了）
+       ② CSP 里的哈希必须和 index.html 的内联脚本**逐个对得上** ——
+          从源码抠内容现算，不在测试里重抄哈希值（重抄等于"测试自己和自己一致"）
+       ③ img-src 必须覆盖 adapters 与 fixture 里出现过的每个图域 ——
+          任一边加了新图域忘了改 CSP，立刻红
+       ④ default-src 兜住所有没列的指令；object/frame 必须是 'none'
+     ======================================================================== */
+  const cspMatch = /<meta http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(htmlSrc);
+  chk(!!cspMatch, 'index.html 里有 CSP meta（没有它，注入的脚本就没有第二道防线）');
+  const csp = cspMatch ? cspMatch[1] : '';
+  const directive = (name) => (new RegExp(name + ' ([^;]+)').exec(csp) || [null, ''])[1];
+
+  const scriptSrc = directive('script-src');
+  chk(scriptSrc.indexOf("'unsafe-inline'") === -1 && scriptSrc.indexOf("'unsafe-eval'") === -1,
+    'script-src 既不放行 unsafe-inline 也不放行 unsafe-eval（放行任一个，这条防线就废了）');
+  chk(scriptSrc.indexOf("'self'") !== -1,
+    'script-src 仍放行同源脚本（data.js / app.js 要能跑）');
+
+  /* ② 哈希逐个对：从 index.html 抠出每处内联脚本现算 sha256，
+        再要求 CSP 的 script-src 里有对应那一条。 */
+  const inlineScripts = [];
+  const scriptRe = /<script>([\s\S]*?)<\/script>/g;
+  let sm;
+  while ((sm = scriptRe.exec(htmlSrc))) inlineScripts.push(sm[1]);
+  const cspHashes = scriptSrc.match(/sha256-[A-Za-z0-9+/=]+/g) || [];
+  const hashMiss = inlineScripts
+    .map((c) => 'sha256-' + crypto.createHash('sha256').update(c, 'utf8').digest('base64'))
+    .filter((h) => cspHashes.indexOf(h) === -1);
+  chk(inlineScripts.length === 2 && hashMiss.length === 0,
+    'CSP 的每个哈希都对得上真实的内联脚本（从源码现算，共 ' + inlineScripts.length
+    + ' 处，' + (hashMiss.length ? '对不上：' + hashMiss.join('、') : '全部命中') + '）');
+  chk(cspHashes.length === inlineScripts.length,
+    'CSP 里没有多余的哈希（多了说明有人粘了一段用不到的，实际 ' + cspHashes.length
+    + ' 个 / 脚本 ' + inlineScripts.length + ' 处）');
+
+  /* ③ 图域白名单必须覆盖代码里出现过的每个**真实**图域。
+        从 server/adapters/*.js（真实适配器）与 server/test-server.js（fixture）
+        抠出所有 http(s) 图片 URL 的主机名 —— 那正是商品图真正的来源。
+        真密钥接入后某家图裂了，第一个该查的就是这里。 */
+  const adFiles = fs.readdirSync(path.join(__dirname, 'server', 'adapters'))
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => path.join(__dirname, 'server', 'adapters', f))
+    .concat([path.join(__dirname, 'server', 'test-server.js')]);
+  const imgHosts = new Set();
+  for (const fp of adFiles) {
+    const src = fs.readFileSync(fp, 'utf8');
+    const hostRe = /https?:\/\/([a-z0-9.-]+\.[a-z]{2,})\/[^"'\s]*\.(?:jpg|jpeg|png|webp)/gi;
+    let hm;
+    while ((hm = hostRe.exec(src))) imgHosts.add(hm[1].toLowerCase());
+  }
+  /* 占位域：fixture 里我们自己编的假图床，真实请求不会打它。
+     **显式列出来，不悄悄过滤** —— 将来谁加了新的占位域，这条会红一下，
+     他就得显式决定"加入排除名单"还是"这是真域、该加进 CSP 白名单"。
+     判据是"这个域有没有对应的真实字段结构"：img.pdd.com /
+     img14.360buyimg.com 跟着拼多多/京东的真实字段进来，img.example 没有。 */
+  const PLACEHOLDER_HOSTS = ['img.example'];
+  const imgSrc = directive('img-src');
+  const realMiss = [...imgHosts].filter((h) => PLACEHOLDER_HOSTS.indexOf(h) === -1)
+    .filter((h) => imgSrc.indexOf(h) === -1);
+  chk(imgHosts.size > 0 && realMiss.length === 0,
+    'CSP 的 img-src 覆盖代码里出现过的每个真实图域（' + [...imgHosts].join(' / ')
+    + (realMiss.length ? '），漏了：' + realMiss.join('、') : '）'));
+  chk(PLACEHOLDER_HOSTS.every((h) => imgSrc.indexOf(h) === -1),
+    '占位域 ' + PLACEHOLDER_HOSTS.join('/') + ' 不该进白名单（真实请求不会打它）');
+  /* token 级比较：'https://img.jd.com' 里也含 'https:' 子串，
+     用 indexOf 会把每个合法域都误报成 https: 通配（2026-10-12 当场踩到）。 */
+  const imgTokens = imgSrc.split(/\s+/);
+  chk(imgTokens.indexOf('https:') === -1 && imgTokens.indexOf('data:') === -1,
+    'img-src 不用 https: / data: 通配（通配等于把用户 IP 和 referer 送给任何图床）');
+
+  chk(directive('default-src').indexOf("'self'") !== -1,
+    'default-src 是 \'self\' —— 兜住所有没显式列的指令（media / worker / frame…）');
+  chk(directive('object-src').indexOf("'none'") !== -1 && directive('frame-src').indexOf("'none'") !== -1,
+    'object-src / frame-src 都是 \'none\'（本页没有任何 embed / iframe）');
+  chk(directive('connect-src').indexOf("'self'") !== -1
+    && directive('connect-src').indexOf('https:') === -1,
+    'connect-src 只放行同源（六个接口全是自己的，不放任何第三方端点）');
 
   /* ========================================================================
      §6.2 收尾：字段缺失时不许在页面上印出字面量 undefined

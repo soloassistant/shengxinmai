@@ -35,6 +35,49 @@
 <meta name="twitter:image" content="https://soloassistant.github.io/shengxinmai/og-image.png">
 <link rel="canonical" href="https://soloassistant.github.io/shengxinmai/">
 
+<!-- ============ 内容安全策略（CSP）============
+     2026-10-12 补上。这个页面的输入面比看上去大：对话内容、分享文本解析结果、
+     以及**各平台联盟接口回传的商品数据**（标题 / 店名 / 图片地址）全都会被
+     拼进 innerHTML。esc() 是第一条防线，CSP 是第二条 —— 万一哪漏了一个，
+     它决定"最坏能发生什么"。
+
+     每一条的取舍（不是照抄模板，逐条对着本页真实资源定的）：
+
+     · script-src 'self' + 两个 sha256 哈希，**不含 'unsafe-inline' / 'unsafe-eval'**
+       本页只有两处内联脚本（head 里的主题防闪烁、body 末尾的 SW 注册），
+       内容静态，用哈希精确放行；其余脚本全是同源的 data.js / app.js。
+       侦查过：app.js 不生成任何 on* 内联事件处理器、不用 eval / new Function、
+       不 document.write、不建 iframe —— 所以这一条**不需要**为宽松而宽松。
+       这是整份 CSP 里最实的一条：注入的 &lt;script&gt; 与 javascript: 一样被挡死。
+
+     · style-src 'self' 'unsafe-inline' —— **明确的代价，不是疏漏**
+       本页有几十处内联 style 属性（index.html 的按钮、app.js 模板字符串里
+       所有卡片布局），CSP 的哈希只能覆盖 <style> 元素、覆盖不了这么多
+       各不相同的属性值；把它们全改成 class 是大工程，且会改变渲染行为。
+       接受它的理由：CSS 注入拿不到数据也执行不了 JS，危害有界；
+       而这些 style 全部出自我们自己的模板，不是用户输入直达。
+       真要收口它，代价是把 app.js 的内联样式整体重构成 class。
+
+     · img-src 'self' + 四家图域 —— 商品图是联盟接口回传的第三方地址
+       （alicdn / jdimg / 360buyimg / pddpic，外加拼多多的 img.pdd.com）。
+       **没有 unsafe-inline、没有 data:、没有 https: 通配**：
+       一张来路不明的图也是请求，会把用户 IP 和 referer 送出去。
+       真密钥接入后若某家图裂了，先查这里 —— test-server.js 有一条断言
+       盯着"adapters fixture 里出现过的每个图域都在白名单里"。
+
+     · connect-src 'self' —— 六个接口全是同源（GitHub Pages 上探不到就是 404，
+       那正是"纯前端模式"的既定行为）。不放行任何第三方端点。
+
+     · object-src / frame-src 'none' —— 本页没有任何 embed / iframe。
+     · base-uri 'self' —— 挡 <base> 注入把相对 URL 指到别处。
+     · form-action 'self' —— 表单由 JS 拦截，永不真提交。
+     · manifest-src 'self' / font-src 'self' —— 全是自有资源，无外部字体。
+
+     ⚠ meta 形式的 CSP 不支持 frame-ancestors / sandbox / report-uri，
+     所以这里没有"违规上报"—— 它只在浏览器控制台留一条。够了：
+     这个体量的项目不需要为看不见的报表再搭一套收集。 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-BhU9RaCKvi8OF8DSLidyhndeQ9cHnJZ2AysokrrRCjI=' 'sha256-TIsp2AuPH+RKbYTuDVrIqChG1aDk47xxn6ctylqD5zM='; style-src 'self' 'unsafe-inline'; img-src 'self' https://img.alicdn.com https://img.jd.com https://img14.360buyimg.com https://img.pddpic.com https://img.pdd.com; connect-src 'self'; font-src 'self'; manifest-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'">
+
 <!-- 主题色跟随明暗，让手机浏览器地址栏不再在深色模式下刺眼。
      用单个 meta + JS 更新，而不是两个带 media 的 meta：
      后者在用户手动切主题时会和系统偏好打架，地址栏和页面颜色对不上。 -->

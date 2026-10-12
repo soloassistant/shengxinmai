@@ -787,6 +787,7 @@ say('\n— 聚合并发 —');
         ['/server/adapters/dataoke.js', '联盟字段映射'],
         ['/tools/mutate-verify.py', '测试工具'],
     ['/tools/check-keys.js', '密钥自检工具（会读 env，更不该被下载）'],
+        ['/tools/csp-verify.js', 'CSP 运行级验证工具（内含探针地址与 Chrome 路径）'],
         ['/package.json', '依赖与脚本清单'],
         ['/README.md', '项目文档'],
         ['/test-out.txt', '测试日志'],
