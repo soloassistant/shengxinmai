@@ -79,6 +79,17 @@ if (!fs.existsSync(CHROME)) {
   const results = [];
   const rec = (ok, label, detail) => { results.push({ ok, label, detail }); };
 
+  /* 两套部署形态不同：workbuddy host 跑 Node（六个接口都在），
+     GitHub Pages 是纯静态（/api/health 与 /api/metrics 必然 404，
+     前端按既定设计退回「手动比价」）。所以先探一次，
+     没有服务端就把那两条断言换成"预期不出现" ——
+     否则在 Pages 上永远有两条假红，而假红会训练人忽略这个工具的输出。 */
+  let hasServer = true;
+  try {
+    const h = await page.request.get(URL.replace(/\/$/, '') + '/api/health');
+    hasServer = h.status() === 200;
+  } catch { hasServer = false; }
+
   try {
     await page.goto(URL, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1800);          // 等启动探测 + loadMetrics 落盘
@@ -121,9 +132,20 @@ if (!fs.existsSync(CHROME)) {
       };
     });
     rec(drawer.open === true, '抽屉能打开（drawer 渲染 + 焦点管理没被 CSP 破坏）', '');
-    rec(drawer.metrics === true, '抽屉里出现「服务端统计」（/api/metrics 走得通，投影字段消费正常）', '');
+    if (hasServer) {
+      rec(drawer.metrics === true,
+        '抽屉里出现「服务端统计」（/api/metrics 走得通，投影字段消费正常）', '');
+    } else {
+      /* 纯静态部署的**预期**：没有服务端就不画这块（缺一块信息好过显示一条假数据）。
+         这条反过来钉住"纯静态模式下不假装有服务端统计"。 */
+      rec(drawer.metrics === false,
+        '纯静态部署：抽屉里**不**出现「服务端统计」（不假装有服务端，既定主形态）', '');
+    }
 
-    const clean = problems.filter((p) => !/Content Security Policy|Refused to/i.test(p));
+    /* 纯静态模式下 /api/health 与 /api/metrics 的 404 是既定行为（前端照例探一次，
+       404 后走纯前端路径）。判据是"除了这两个已知 404 之外零报错"。 */
+    const clean = problems.filter((p) => !/Content Security Policy|Refused to/i.test(p))
+      .filter((p) => !(hasServer === false && /Failed to load resource.*404/.test(p)));
     rec(clean.length === 0, '正常资源零报错（没有 pageerror / 请求失败）',
       clean.length ? clean.join(' | ') : '0 条');
 
