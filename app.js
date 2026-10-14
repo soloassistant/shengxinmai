@@ -959,8 +959,11 @@
       ${notes}`;
   }
 
-  /** 纯前端模式下的清单：不给总价，只把入口摆好 —— 编一个总价比不给更糟 */
-  function renderBasketOffline(queries) {
+  /** 纯前端模式下的清单：不给总价，只把入口摆好 —— 编一个总价比不给更糟。
+   *  why = 'nokey'  → 服务端连着但 0 个密钥（去配 key）
+   *  why = 其他     → 没连上服务端（去起服务端）
+   *  两句话必须分开：用户按它做决定，指错路比不指路更糟。 */
+  function renderBasketOffline(queries, why) {
     /* 降级也要和比价卡给**同一组**入口（2026-10-05 审计指出：原来只给
        SHOP_PLATFORMS[0]=京东 一个，而比价卡给 6 个 —— 同为降级却能力不一致）。 */
     const linksFor = (q) => SHOP_PLATFORMS.map((p) =>
@@ -973,18 +976,24 @@
         <div class="bi-links">${linksFor(q)}</div>
       </div>`).join('');
 
+    const note = why === 'nokey'
+      ? `清单必须<strong>把所有商品都比完</strong>才能算总账，只有服务端能一次问完各平台。
+         服务端已经连上，但当前 <strong>0 个数据源配了密钥</strong>，所以我<strong>不会给你编一个总价</strong>。
+         在右上角「接入状态」里配好任一联盟密钥后，这里立刻就能算真账。`
+      : `清单必须<strong>把所有商品都比完</strong>才能算总账，只有服务端能一次问完各平台。
+         现在没连上 <code>/api/compare</code>，所以我<strong>不会给你编一个总价</strong>。
+         启动服务端（<code>node server/server.js</code>）后这里就会变成真的。`;
+
     return `
       <div class="card-head">
         <div>
           <div class="card-title">省钱清单</div>
-          <div class="card-note">需要服务端做跨平台询价，当前没连上</div>
+          <div class="card-note">${why === 'nokey' ? '需要数据源密钥才能跨平台询价' : '需要服务端做跨平台询价，当前没连上'}</div>
         </div>
         <span class="tag tag-mute">降级</span>
       </div>
       <div class="banner banner-warn"><span class="banner-ico">!</span>
-        <span>清单必须<strong>把所有商品都比完</strong>才能算总账，只有服务端能一次问完各平台。
-        现在没连上 <code>/api/compare</code>，所以我<strong>不会给你编一个总价</strong>。
-        启动服务端（<code>node server/server.js</code>）后这里就会变成真的。</span></div>
+        <span>${note}</span></div>
       <div class="rows">${rows}</div>`;
   }
 
@@ -1431,6 +1440,16 @@
     if (intent.type === 'needDate')    { appendAI(renderNeedDate(intent.date)); return; }
 
     if (intent.type === 'shop') {
+      /* 演示模式排在最前：样例是本地按商品名生成的，**没有任何理由先打一轮网络**。
+         旧顺序里它排在 liveCompare 后面 —— 0 密钥时每次预览都要先白等一次注定
+         空返的请求（实测 1.7~4s）才出样例卡；配了密钥时演示开关更是直接失效
+         （真实数据总会抢先）。卡片照样会标明「演示数据 · 非实时」。 */
+      if (DEMO_MODE) {
+        const dd = demoLive(intent.product);
+        appendAI(renderShopLive(intent.product, dd));
+        return;
+      }
+
       // 先试服务端的真实比价；拿不到就退回手动比价 —— 无论如何都不编数字
       const live = await liveCompare(intent.product);
       if (live) {
@@ -1446,13 +1465,6 @@
           + '。可以稍后再试一次，或点右上角看「接入状态」。'
         : '';
 
-      // 演示模式：让用户看到真接上之后长什么样，卡片会自己标明「演示数据」
-      if (DEMO_MODE) {
-        const dd = demoLive(intent.product);
-        appendAI(renderShopLive(intent.product, dd));
-        return;
-      }
-
       appendAI(renderShop(intent, warn));
       return;
     }
@@ -1462,8 +1474,11 @@
   function ask(text) {
     if (!text) return;
     const intent = parseIntent(text);
-    // 没有具体商品名就别转「正在询价」的圈 —— 反问卡是立刻出的，转圈反而像卡住了
-    const willQueryServer = !!intent && intent.type === 'shop' && !!intent.product && SERVER_OK !== false;
+    // 没有具体商品名就别转「正在询价」的圈 —— 反问卡是立刻出的，转圈反而像卡住了。
+    // 健康检查已明确「服务端连着但 0 个密钥」时同样不转：请求注定空着手回来，
+    // 直接给手动比价卡，别让用户对着骨架屏白等几秒。
+    const willQueryServer = !!intent && intent.type === 'shop' && !!intent.product
+      && SERVER_OK !== false && HEALTH_CONFIGURED_COUNT !== 0;
 
     saveRecent(text);
     renderRecent();
@@ -1481,7 +1496,8 @@
         appendAI(renderError('这一步没走通', String((e && e.message) || e)), text);
       } finally {
         loading.remove();
-        sendBtn.disabled = false;
+        // 输入框在提交时已清空，按「有没有字」恢复发送键状态，而不是无条件点亮
+        syncSendEnabled();
         if (input && input.focus) input.focus();
       }
     }, willQueryServer ? 200 : 420);
@@ -1843,6 +1859,12 @@
 
   /* 服务端权威的「已实现数据源」集合。null = 还没探测到（纯前端模式）。 */
   let HEALTH_IDS = null;
+  /* 服务端报的「配了密钥的数据源个数」。**-1 = 还没探测到**（不是 0！）。
+     0 的确切含义是「服务端连着、但一个密钥都没配」—— 这个状态要知道，
+     因为此刻 /api/compare、/api/basket、/api/flights 问过去只会空着手回来，
+     还要各自白等 1.7~4s（实测）。探测结果未知（-1 / 超时）时维持原状去试，
+     不猜。配好密钥后开一次「接入状态」或断网重连会重新探测，自动恢复。 */
+  let HEALTH_CONFIGURED_COUNT = -1;
   let HEALTH_LIMITS = null;
   /* 服务端报回来的构建标识 { version, buildId }。
      只有在真的问到了服务端时才非空 —— 拿不到就什么都不显示，
@@ -1886,6 +1908,7 @@
          踩过的坑：以前这里只回填 live，抽屉就把所有没配 key 的都写成
          "未接入"，等于向用户承诺了一些后端压根没有的数据源。 */
       HEALTH_IDS = new Set(h.adapters.map((a) => a.id));
+      HEALTH_CONFIGURED_COUNT = h.adapters.filter((a) => a.configured).length;
       HEALTH_LIMITS = (h.limits && typeof h.limits === 'object') ? h.limits : null;
       /* 构建标识：服务端算的**前端内容指纹**。
          两套部署 + 手动重发，光看页面分不出新旧（功能都在，只是旧的），
@@ -1972,6 +1995,11 @@
   async function liveCompare(q) {
     lastLiveError = '';
     if (SERVER_OK === false) return null;
+    /* 健康检查已明确「服务端连着、但一个密钥都没配」：/api/compare 只会返回空的
+       platforms 列表，问了也是立刻退回手动卡 —— 那就别问，省掉白等（实测 1.7~4s）。
+       恢复路径是现成的：配好密钥后开一次「接入状态」（或断网重连）会重新探测，
+       下一条查询就会重新走真实接口。探测结果未知（-1 / 超时）时维持原状去试。 */
+    if (SERVER_OK === true && HEALTH_CONFIGURED_COUNT === 0) return null;
     try {
       const res = await fetch('/api/compare?q=' + encodeURIComponent(q),
         { signal: AbortSignal.timeout(12000) });
@@ -2008,6 +2036,14 @@
   async function liveFlights(from, to, date) {
     lastLiveError = '';
     if (SERVER_OK === false) return null;
+    /* 与 liveCompare 同一条道理：0 个密钥时 /api/flights 问过去也是空，
+       别让用户对着占位骨架白等一轮。顺手把原因写进 flightsNote ——
+       fillFlights 的降级卡直接用它，用户看到的是"没配密钥"而不是"未接入"，
+       这两个的处理动作完全相反（一个是去配 key，一个是去起服务端）。 */
+    if (SERVER_OK === true && HEALTH_CONFIGURED_COUNT === 0) {
+      flightsNote = '服务端已连上，但当前 0 个数据源配了密钥（机票报价来自 ignav）。配上密钥后这里就有实时报价。';
+      return null;
+    }
     const f = CITY_AIR[from];
     const t = CITY_AIR[to];
     // 没有三字码就查不了 —— 这也是「拿不到」的一种，如实退回手动
@@ -2176,8 +2212,18 @@
     const text = input.value.trim();
     if (!text) return;
     input.value = '';
+    syncSendEnabled();
     ask(text);
   });
+
+  /* 发送键跟着输入框有没有字走。空输入点了也白点（会走一遍反问/无操作流程），
+     禁用态把这件事直接说出来；提交时输入框已清空，自然回到禁用。
+     init 与 input 事件各同步一次，chip 填充后也同步（见下面 .chip 分支）。 */
+  function syncSendEnabled() {
+    if (sendBtn) sendBtn.disabled = !(input && input.value.trim());
+  }
+  if (input && input.addEventListener) input.addEventListener('input', syncSendEnabled);
+  syncSendEnabled();
 
   document.addEventListener('click', (e) => {
     /* 顺序有讲究：先判 data-open，再判 .chip / .cap。
@@ -2254,7 +2300,18 @@
     }
 
     const chip = e.target.closest('.chip');
-    if (chip && chip.dataset.fill) { input.value = chip.dataset.fill; input.focus(); return; }
+    if (chip && chip.dataset.fill) {
+      input.value = chip.dataset.fill;
+      /* 光标落到「从」字之后：机票/火车票的填充文本是「帮我查机票 从 到 」，
+         落末端用户得自己把光标挪回中间再打字。实测 selection 落在"从"后。
+         非出行类 chip（「帮我买 」「想点个 」）没有"从"，落末端即可。 */
+      const m = /从\s*/.exec(chip.dataset.fill);
+      const pos = m ? m.index + m[0].length : chip.dataset.fill.length;
+      if (input.setSelectionRange) input.setSelectionRange(pos, pos);
+      input.focus();
+      syncSendEnabled();
+      return;
+    }
 
     const cap = e.target.closest('.cap');
     if (cap && cap.dataset.demo) { ask(cap.dataset.demo); return; }
@@ -2337,9 +2394,12 @@
     const loading = showLoading({ label: '逐件询价中（' + items.length + ' 件，要问 ' + items.length + ' 轮）…' });
 
     try {
-      if (SERVER_OK === false) {
+      /* 连不上服务端、或健康检查已确认 0 个密钥：都不必再发请求。
+         后者实测要白等近 3 秒才拿回一个"给不出方案"。两种状态给不同的说明文案 ——
+         "没连上"要去起服务端，"0 密钥"要去配 key，处理动作正好相反。 */
+      if (SERVER_OK === false || (SERVER_OK === true && HEALTH_CONFIGURED_COUNT === 0)) {
         loading.remove();
-        appendAI(renderBasketOffline(items));
+        appendAI(renderBasketOffline(items, SERVER_OK === true ? 'nokey' : 'offline'));
         return;
       }
 

@@ -1351,6 +1351,72 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   chk(offHosts.size >= 3, '至少给了 3 个主要平台，实际 ' + offHosts.size);
 
   /* ==========================================================================
+     零密钥即时降级（2026-10-14）：问过去只会空着手回来的请求，就别问
+     ----------------------------------------------------------------------
+     背景：/api/health 早就告诉前端「服务端连着、0 个密钥」，但比价/机票/清单
+     三条路照旧各打一次注定空返的请求（实测 1.7~4s / ~2.9s）才降级。
+     修在数据入口（liveCompare / liveFlights 顶部），一处收口。
+     这段盯三件事：① 零密钥时真的不发请求；② 降级文案分得开两种原因；
+     ③ **反向**：配了密钥的必须照旧发请求 —— 不许把真链路一起短路掉，
+        那比原 bug 更糟（用户界面上一个价格都看不到，还不报错）。
+     ========================================================================== */
+  say('\n— 零密钥即时降级：不问空返的请求 —');
+
+  let compareCalls = 0;
+  const zeroKeyFetch = async (url) => {
+    const u = String(url);
+    if (u.indexOf('/api/health') !== -1) return { ok: true, json: async () => HEALTH };
+    if (u.indexOf('/api/compare') !== -1) {
+      compareCalls++;
+      return { ok: true, json: async () => ({ ok: true, platforms: [] }) };
+    }
+    return { ok: false, status: 404, json: async () => null };
+  };
+
+  /* 态一：服务端连着、0 个密钥 —— 线上真实形态 */
+  sandbox.fetch = zeroKeyFetch;
+  await SXM.probeHealth();
+  const liveZero = await SXM.liveCompare('耳机');
+  chk(liveZero === null, '零密钥时 liveCompare 直接返回 null（不等网络）');
+  chk(compareCalls === 0,
+    '零密钥时一次 /api/compare 都没发（省掉实测 1.7~4s 白等），实际 ' + compareCalls + ' 次');
+
+  /* 降级文案必须分得开"0 密钥"和"没连上" —— 用户的下一步动作正相反 */
+  const nokeyHtml = SXM.renderBasketOffline(['猫粮'], 'nokey');
+  chk(/0 个数据源配了密钥/.test(nokeyHtml), 'nokey 文案点明「0 个数据源配了密钥」（去配 key）');
+  chk(/不会给你编一个总价/.test(nokeyHtml), 'nokey 文案同样守住「不编总价」的底线');
+  chk(!/node server\/server\.js/.test(nokeyHtml),
+    'nokey 文案不教人去起服务端（服务端明明连着，指错路比不指路更糟）');
+  const offlineHtml2 = SXM.renderBasketOffline(['猫粮']);
+  chk(/node server\/server\.js/.test(offlineHtml2), '不传 why 时保持原「没连上」文案（去起服务端）');
+  chk(!/0 个数据源配了密钥/.test(offlineHtml2), '两种降级文案不串台');
+
+  /* 态二（反向，不许误伤）：配了密钥的必须照旧发请求、真数据原样返回 */
+  const HEALTH_ONE = Object.assign({}, HEALTH, {
+    configuredCount: 1,
+    adapters: HEALTH.adapters.map((a) => (a.id === 'pdd' ? Object.assign({}, a, { configured: true }) : a)),
+  });
+  sandbox.fetch = async (url) => {
+    const u = String(url);
+    if (u.indexOf('/api/health') !== -1) return { ok: true, json: async () => HEALTH_ONE };
+    if (u.indexOf('/api/compare') !== -1) {
+      compareCalls++;
+      return { ok: true, json: async () => ({ ok: true, platforms: [{ id: 'pdd', name: '拼多多', items: [] }] }) };
+    }
+    return { ok: false, status: 404, json: async () => null };
+  };
+  await SXM.probeHealth();
+  const liveOne = await SXM.liveCompare('耳机');
+  chk(compareCalls === 1,
+    '配了密钥后 liveCompare 照旧真打 /api/compare（优化没把真链路一起短路），实际 ' + compareCalls + ' 次');
+  chk(!!liveOne && Array.isArray(liveOne.platforms) && liveOne.platforms.length === 1,
+    '配了密钥时真实数据原样返回给调用方');
+
+  /* 收尾：恢复"0 密钥"态（线上真实形态），别影响后面的用例 */
+  sandbox.fetch = healthStub;
+  await SXM.probeHealth();
+
+  /* ==========================================================================
      2026-10-06：合并外部定稿补丁（26 处改动）后的行为守卫
      --------------------------------------------------------------------------
      为什么必须补这一段：补丁合并进来之后整套 536 条**全绿**，

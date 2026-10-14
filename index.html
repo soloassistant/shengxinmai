@@ -91,6 +91,7 @@
      （给圆角图会变成"圆角套圆角"，四角露出底色），文件也不带透明通道。 -->
 <link rel="apple-touch-icon" href="apple-touch-icon.png" sizes="180x180">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="省心买">
 <link rel="stylesheet" href="styles.css">
 
@@ -140,7 +141,7 @@
     <!-- 欢迎卡 -->
     <section class="msg msg-ai" id="welcome">
       <div class="bubble bubble-ai">
-        <p class="lead">说一句人话，我把该比的都给你比了。</p>
+        <h1 class="lead">说一句人话，我把该比的都给你比了。</h1>
         <div class="cap-grid">
           <button class="cap" data-demo="帮我买 AirPods Pro 3">
             <span class="cap-ico ico-shop">比</span>
@@ -188,7 +189,7 @@
           <path fill="currentColor" d="M18.9 11.5a.9.9 0 1 0-1.8 0 5.1 5.1 0 0 1-10.2 0 .9.9 0 1 0-1.8 0 6.9 6.9 0 0 0 6 6.83v1.87H9.2a.9.9 0 1 0 0 1.8h5.6a.9.9 0 1 0 0-1.8h-1.9v-1.87a6.9 6.9 0 0 0 6-6.83Z"/>
         </svg>
       </button>
-      <button class="send" type="submit" aria-label="发送">↑</button>
+      <button class="send" type="submit" aria-label="发送" disabled>↑</button>
     </form>
     <p class="legal">仅供比价与跳转，不代下单、不代支付</p>
   </footer>

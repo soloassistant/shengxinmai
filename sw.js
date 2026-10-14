@@ -23,7 +23,7 @@
 /* 缓存名要跟着**预缓存清单**走：SHELL 里加了文件就得升版本号，
    否则已经装过 App 的用户不会重新跑 install，新图标永远进不了缓存
    （在线时看不出来 —— 网络优先照样能取到；一断网才暴露）。 */
-const VERSION = 'sxm-shell-v2';
+const VERSION = 'sxm-shell-v3';
 const SHELL = [
   './',
   './index.html',
@@ -33,6 +33,13 @@ const SHELL = [
   './icon.svg',
   './icon-192.png',
   './icon-512.png',
+  /* 这三个之前漏了：manifest 引用了 maskable 图标，HTML 引用了
+     favicon 和 apple-touch-icon。装到主屏后断网首次启动，
+     系统取这几张图时会落空（在线时看不出来 —— 网络优先照样能取到）。
+     文件都真实存在于仓库里，预缓存不会 404。 */
+  './icon-maskable-512.png',
+  './favicon-32.png',
+  './apple-touch-icon.png',
   './manifest.json'
 ];
 

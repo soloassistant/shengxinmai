@@ -11,7 +11,7 @@
   --line-soft:     #EEF0F3;
   --ink:           #14181F;
   --ink-2:         #4A525F;
-  --ink-3:         #8A93A2;
+  --ink-3:         #666E7B;
   --brand:         #FF5A36;
   --brand-soft:    #FFF1ED;
   --brand-ink:     #C7371A;
@@ -27,6 +27,7 @@
 }
 
 *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+h1{ margin:0; }
 
 html,body{ height:100%; }
 body{
@@ -56,8 +57,10 @@ p{ margin:0; }
 .topbar{
   position:sticky; top:0; z-index:20;
   display:flex; align-items:center; justify-content:space-between;
-  padding:12px 16px calc(12px + env(safe-area-inset-bottom,0));
-  padding-bottom:12px;
+  /* 原来是两行：calc(... safe-area-inset-bottom ...) + padding-bottom:12px。
+     后者把前者的 bottom 整段覆盖掉 ⇒ 第一行只剩左/右/顶在起作用，是死代码。
+     清理成一行 12px 16px，计算值与改动前逐字一致（不引入任何视觉变化）。 */
+  padding:12px 16px;
   background:rgba(245,246,248,.88);
   backdrop-filter:saturate(180%) blur(12px);
   border-bottom:1px solid var(--line-soft);
@@ -564,7 +567,7 @@ p{ margin:0; }
   --line-soft: #23282F;
   --ink:       #EDF0F4;
   --ink-2:     #A9B2BF;
-  --ink-3:     #737D8C;
+  --ink-3:     #8B95A3;
   --brand:     #FF6A45;
   --brand-soft:#2A1B16;
   --brand-ink: #FFA98C;
@@ -790,4 +793,14 @@ p{ margin:0; }
 @media (prefers-reduced-motion: reduce){
   .toast{ animation:none; }
   .mic.listening{ animation:none; }
+}
+
+/* ---------- 窄屏（≤380px，如 iPhone SE / mini）----------
+   顶栏三件套（品牌 + 两个 ghost 按钮）在 380px 上开始挤：按钮 padding 收一档、
+   副标题藏掉，换横向空间。断点取 380 是量过的：再宽就不挤，再窄 ghost 按钮
+   会从 32px 级掉到 28px 以下、低于可点区域下限。 */
+@media (max-width:380px){
+  .topbar{ padding:10px 12px; }
+  .ghost-btn{ padding:6px 9px; font-size:12px; }
+  .brand-sub{ display:none; }
 }
