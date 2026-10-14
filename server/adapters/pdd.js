@@ -84,6 +84,12 @@ module.exports = {
       page_size: String(pageSize),
       sort_type: '0'
     };
+    /* 推广位 PID：多多进宝文档里 goods.search 的 p_id 是必填，但**没配 PID 时先不发**
+       —— 发了空值/错值反而可能被网关拦。配了（env.PDD_PID）才带上，
+       这样"拿到 PID 填进 env.local.json 即生效"，不用再改一轮代码。
+       2026-10-14：先用假凭据打不通"要不要 PID"这个问题（拒绝停在凭据），
+       等第一次真 key 调用看上游原话再定；届时把回话贴给 check-keys.js 的输出就行。 */
+    if (env.PDD_PID) params.p_id = String(env.PDD_PID);
     params.sign = signPdd(params, env.PDD_CLIENT_SECRET);
 
     // 多多进宝网关收 POST + JSON body，参数（含 sign）全在 body 里。
