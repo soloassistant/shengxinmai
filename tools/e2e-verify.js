@@ -167,8 +167,19 @@ const contrast = (a, b) => {
     await page.goto(URL_BASE, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1200);
 
-    /* SW 起来并接管（install 里 skipWaiting、activate 里 clients.claim） */
-    const swState = await page.evaluate(() => navigator.serviceWorker.ready.then((r) => (r.active ? r.active.state : 'none')));
+    /* SW 起来并接管（install 里 skipWaiting、activate 里 clients.claim）。
+       ⚠ 必须轮询，不能只 await 一次 ready：`serviceWorker.ready` 在
+       **active worker 已经存在**时就会 resolve，而那一刻它的 state 可能还是
+       `activating`。本机（快）一次就拿到 activated，线上 HTTPS（慢）第一次
+       拿到的是 activating —— 那是**采样过早**，不是站点没激活
+       （同一轮的 controller=true / 缓存 12 项齐全，只可能在 activate 之后成立）。
+       断言强度不变，只是给它时间落定。 */
+    let swState = 'none';
+    for (let i = 0; i < 40; i++) {
+      swState = await page.evaluate(() => navigator.serviceWorker.ready.then((r) => (r.active ? r.active.state : 'none')));
+      if (swState === 'activated') break;
+      await page.waitForTimeout(250);
+    }
     rec(swState === 'activated', 'Service Worker 注册并 activated', 'state=' + swState);
 
     let controller = null;
