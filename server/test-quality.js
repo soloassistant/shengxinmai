@@ -277,6 +277,22 @@ check(pubJd && pubJd.calls === 2 && pubJd.successRate === 0.5 && typeof pubJd.av
 check(!('paths' in pub) && !('uptimeMs' in pub) && !('store' in pub),
   'snapshotPublic 不带 paths / uptimeMs / store —— 逐路径调用量、进程启动时刻、价格库路径都是白送的情报');
 
+/* byPath 的 key 是原始 pathname：/api/* 是有限集合，但 404 扫描的路径是无限的。
+   没有上限的话，随机路径刷一遍就在 Map 里留下常驻条目 —— 慢速内存泄漏。
+   上限（64 条）之外必须并进 'other'，计数照常累计。 */
+say('\n— 指标按路径的内存上限 —');
+const mtCap = createMetrics();
+for (let i = 0; i < 300; i++) mtCap.request('/scan-' + i, 404, 1);
+const snapCap = mtCap.snapshot();
+check(snapCap.paths.length === 65,
+  '300 个随机路径只留 64 条明细 + 1 条 other（实际 ' + snapCap.paths.length + ' 条）');
+check(snapCap.requests === 300, '溢出后总请求数照常累计，一笔不丢');
+const other = snapCap.paths.find((p) => p.path === 'other');
+check(!!other && other.count === 300 - 64,
+  '溢出的 236 个路径并进 other，计数不丢（实际 ' + (other ? other.count : '无') + '）');
+check(!snapCap.paths.some((p) => /^\/scan-1\d\d/.test(p.path)),
+  '溢出路径不再单开条目（第 65 个起全部并入 other）');
+
 /* ==========================================================================
    5.5 密钥文件装载（envfile）—— 真实数据接入的地基
    --------------------------------------------------------------------------

@@ -169,20 +169,23 @@ shengxinmai/
 ├─ manifest.json       PWA 清单（可安装到桌面 / 主屏）
 ├─ sw.js               Service Worker：外壳网络优先，/api/* 永不缓存
 ├─ icon.svg            应用图标
-├─ test-parse.js       前端验证（90 项）
+├─ test-parse.js       前端验证（409 项）
 └─ server/             服务端（零依赖 Node）
-   ├─ server.js        单一入口：/api/* + 静态文件 + 结构化日志 + 限流
+   ├─ server.js        单一入口：/api/* + 静态文件 + gzip + 结构化日志 + 限流
    ├─ lib/sign.js      四个平台的签名算法（附文档出处）
    ├─ lib/http.js      超时请求 / 字段兜底取值 / 只对网络错和 5xx 重试
+   ├─ lib/clientip.js  从 X-Forwarded-For 里取不可伪造的最后一跳（限流 key）
    ├─ lib/logger.js    结构化 JSON 日志（带请求 id，可串联一次请求的所有行）
    ├─ lib/cache.js     TTL + LRU 缓存（60 秒，防止同词反复打平台接口）
    ├─ lib/ratelimit.js 令牌桶限流（按 IP，突发 60 次 / 每秒 1 次）
-   ├─ lib/metrics.js   按接口 / 按平台统计调用量与成功率
+   ├─ lib/metrics.js   按接口 / 按平台统计调用量与成功率（路径条目有硬上限）
    ├─ lib/store.js     自采价格历史（只记自己看见过的价，绝不编造曲线）
    ├─ lib/basket.js    省钱清单算法：分件买 vs 一家买齐 + 麻烦门槛
-   ├─ adapters/        大淘客（淘宝）· 京东联盟 · 多多进宝
-   ├─ test-server.js   服务端验证（47 项）
-   └─ test-quality.js  质量专项验证（113 项：缓存 / 限流 / 历史 / 清单 / 重试）
+   ├─ lib/envfile.js   密钥文件装载（env 优先、文件其次，坏了不炸启动）
+   ├─ lib/static-whitelist.js 对外静态白名单（fail-closed，与 pages.yml 同源）
+   ├─ adapters/        大淘客（淘宝）· 京东联盟 · 多多进宝 · ignav（机票）
+   ├─ test-server.js   服务端验证（168 项）
+   └─ test-quality.js  质量专项验证（149 项：缓存 / 限流 / 历史 / 清单 / 重试）
 ```
 
 直接打开 `index.html` 即可，不需要起服务。
@@ -325,11 +328,12 @@ SXM.setDemo(true)                         // 打开效果预览
 | 能力 | 做法 |
 |---|---|
 | 可排查 | 每个请求分配 rid，结构化 JSON 日志（方法 / 路径 / 状态 / 耗时 / IP）|
-| 限流 | 令牌桶按 IP：突发 60 次、每秒 1 次；清单接口独立配额 |
+| 限流 | 令牌桶按 IP：突发 60 次、每秒 1 次；清单接口独立配额。IP 取 XFF **最后一跳**（第一段是客户端可以伪造的，取它会绕开限流）|
+| 压缩 | 静态与接口响应按协商出 gzip（仅文本类、≥1KB；PNG 不压）。app.js 143KB → 51KB，这是零依赖前提下最大的加载提速 |
 | 缓存 | 同一个比价词 60 秒内直接回缓存，不打平台接口 |
 | 重试 | 只对网络错误 / 5xx / 429 重试；业务错误（签名错等）不重试，不浪费配额 |
-| 指标 | `/api/metrics` 看各平台成功率，哪个平台悄悄挂了一目了然 |
-| 安全 | 静态服务挡住点号路径（`.data` 价格库不会被下载）；`/api/*` 只允许 GET |
+| 指标 | `/api/metrics` 看各平台成功率，哪个平台悄悄挂了一目了然。逐路径条目有硬上限，404 扫描刷不爆内存 |
+| 安全 | 静态服务挡住点号路径（`.data` 价格库不会被下载）；`/api/*` 只允许 GET；带 `X-Frame-Options` 与 `frame-ancestors` 头防点击劫持（meta CSP 表达不了这条，只能由服务端补；部署平台要跨域嵌入时设 `SXM_FRAME_ANCESTORS`）|
 
 ### 前端体验
 

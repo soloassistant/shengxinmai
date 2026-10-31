@@ -34,6 +34,7 @@ const http = require('node:http');
 const fs   = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const zlib = require('node:zlib');
 
 const { compare, status } = require('./adapters');
 const flightAdapter = require('./adapters/ignav');
@@ -46,6 +47,7 @@ const { computeBasket, DEFAULT_THRESHOLD } = require('./lib/basket');
 const { settle } = require('./lib/http');
 const { loadEnvFile } = require('./lib/envfile');
 const { STATIC_WHITELIST } = require('./lib/static-whitelist');
+const { pickClientIp } = require('./lib/clientip');
 
 /* 密钥装载：优先真实环境变量，其次 server/env.local.json（部署沙箱设不了 env，密钥随目录走）。
    必须在读取任何 process.env 之前执行。 */
@@ -122,6 +124,35 @@ const MIME = {
   '.webmanifest': 'application/manifest+json; charset=utf-8'
 };
 
+/* ---------- 响应压缩（gzip）----------
+   app.js 原始 143KB，gzip 后约 40KB；比价 JSON 的空白缩进更是几乎全被压掉。
+   对一个以手机访问为主的页面，这是不引入任何依赖就能拿到的最大加载提速。
+
+   只压文本类 MIME；PNG 已经是压缩格式，再包一层gzip 只费 CPU 不省字节。
+   小于 1KB 的不压：头部开销比省下的字节还多。
+   客户端没带 Accept-Encoding: gzip 就原样发 —— 协商权在客户端。 */
+const COMPRESSIBLE = new Set(['.html', '.css', '.js', '.json', '.svg', '.md', '.webmanifest']);
+const GZIP_MIN = 1024;
+
+function acceptsGzip(req) {
+  const ae = req.headers['accept-encoding'];
+  return typeof ae === 'string' && ae.toLowerCase().split(',').some((t) => t.trim().split(';')[0] === 'gzip');
+}
+
+/* 静态文件的 gzip 结果按「文件身份」缓存：压缩一次反复用。
+   key 用 size+mtime（便宜），跟 buildId() 同一个模式 —— 内容身份由
+   ETag（内容哈希）负责，这里只负责不重复压缩。条目数受白名单约束，
+   天然有界，不需要淘汰。 */
+const GZIP_CACHE = new Map();
+function gzipStatic(file, st, buf) {
+  const key = st.size + ':' + st.mtimeMs;
+  const hit = GZIP_CACHE.get(file);
+  if (hit && hit.key === key) return hit.buf;
+  const zbuf = zlib.gzipSync(buf, { level: zlib.constants.Z_BEST_COMPRESSION });
+  GZIP_CACHE.set(file, { key, buf: zbuf });
+  return zbuf;
+}
+
 /* ---------- 组件 ---------- */
 const cache   = createCache({ ttl: CACHE_TTL, max: 500 });
 const metrics = createMetrics();
@@ -145,30 +176,46 @@ try {
 /* ---------- 响应工具 ---------- */
 function json(res, code, obj, rid, extra = {}) {
   const body = JSON.stringify(obj, null, 2);
-  res.writeHead(code, {
+  const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     'Access-Control-Allow-Origin': '*',
     ...(rid ? { 'X-Request-Id': rid } : {}),
     ...extra
-  });
-  res.end(body);
+  };
+  /* API 响应也压缩：比价结果带 8 条商品 × N 个平台，JSON 体积可观，
+     而 2 空格缩进（为了可排查）让体积再翻一倍 —— 好在空白压得最狠。
+     HEAD 请求没有 body，不花这个 CPU。 */
+  if (res.req && res.req.method === 'HEAD') {
+    res.writeHead(code, headers);
+    return res.end();
+  }
+  if (acceptsGzip(res.req) && body.length >= GZIP_MIN) {
+    const zbuf = zlib.gzipSync(Buffer.from(body));
+    headers['Content-Encoding'] = 'gzip';
+    headers['Content-Length'] = zbuf.length;
+    res.writeHead(code, headers);
+    return res.end(zbuf);
+  }
+  headers['Content-Length'] = Buffer.byteLength(body);
+  res.writeHead(code, headers);
+  return res.end(body);
 }
 
 const fail = (res, code, errCode, message, rid, extra) =>
   json(res, code, { ok: false, error: { code: errCode, message } }, rid, extra);
 
 /**
- * 取客户端 IP。
- * 必须优先看 X-Forwarded-For：线上跑在反向代理后面，
+ * 取客户端 IP（限流 key / 日志字段）。
+ * 必须看 X-Forwarded-For：线上跑在反向代理后面，
  * 直接读 socket.remoteAddress 会拿到代理自己的地址，
  * 结果就是"全世界共用一个令牌桶"—— 一个人点几十下，所有人都被限流。
- * 这个坑在本地测不出来，上线当天才会爆。
+ * 取**最后一跳**而不是第一段：XFF 是"逐跳追加"的，
+ * 最左边那段是客户端可以随便写的（写个假 IP 每次换一个，令牌桶就被绕开了）；
+ * 最右边才是我们自己的代理亲眼看来的、不可伪造的地址。取舍见 lib/clientip.js。
  */
 function clientIp(req) {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff.trim()) return xff.split(',')[0].trim();
-  return req.socket.remoteAddress || 'unknown';
+  return pickClientIp(req.headers, req.socket.remoteAddress);
 }
 
 /* ---------- 静态文件 ---------- */
@@ -183,7 +230,16 @@ function etagOf(buf) {
 }
 
 function serveStatic(req, res, urlPath) {
-  const rel = decodeURIComponent(urlPath === '/' ? '/index.html' : urlPath);
+  /* 畸形百分号编码（如 /app.js%）会让 decodeURIComponent 直接抛 URIError ——
+     走到外层 catch 会变成 500「服务内部错误」+ 一条 error 日志。
+     这是客户端的请求问题，不是服务的问题：如实回 404。 */
+  let rel;
+  try {
+    rel = decodeURIComponent(urlPath === '/' ? '/index.html' : urlPath);
+  } catch {
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found');
+    return;
+  }
   const file = path.resolve(ROOT, '.' + rel);
 
   // 目录穿越防护：解析后必须仍在 ROOT 内
@@ -241,7 +297,10 @@ function serveStatic(req, res, urlPath) {
            核对靠 ETag：命中就 304，连接上只走几百字节的头，不重传体积。 */
         'Cache-Control': 'no-cache',
         'ETag': etag,
-        'Last-Modified': st.mtime.toUTCString()
+        'Last-Modified': st.mtime.toUTCString(),
+        /* 压不压缩随 Accept-Encoding 变，同一 URL 会有两种字节 ——
+           中间代理必须按这个头区分缓存，否则可能把 gzip 版发给不支持它的客户端。 */
+        'Vary': 'Accept-Encoding'
       };
 
       if (matched) {
@@ -249,6 +308,18 @@ function serveStatic(req, res, urlPath) {
         res.writeHead(304, headers).end();
         return;
       }
+
+      /* 文本类且客户端认 gzip：发压缩版。ETag 仍然是对未压缩内容的哈希
+         （协商缓存的身份不随传输编码变），加上 Vary 后这与 RFC 做法一致。 */
+      const ext = path.extname(file).toLowerCase();
+      if (COMPRESSIBLE.has(ext) && buf.length >= GZIP_MIN && acceptsGzip(req)) {
+        const zbuf = gzipStatic(file, st, buf);
+        headers['Content-Encoding'] = 'gzip';
+        headers['Content-Length'] = zbuf.length;
+        res.writeHead(200, headers).end(zbuf);
+        return;
+      }
+
       headers['Content-Length'] = buf.length;
       res.writeHead(200, headers).end(buf);
     });
@@ -541,6 +612,24 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('X-Request-Id', rid);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
+
+  /* 防点击劫持（clickjacking）。index.html 里的 meta CSP 做不到这件事 ——
+     frame-ancestors 只能以响应头形式生效（HTML 注释里写明了这个限制），
+     所以在**有服务端的这一套部署**上补上。Pages 那套没有服务端，
+     只能继续靠它已有的约束。
+     本页没有要被第三方嵌入的理由。若部署平台要把应用嵌进跨域预览框，
+     设 SXM_FRAME_ANCESTORS 放行指定来源（如 https://admin.example.com），
+     设 * 全放行，设 off 关闭整套头。 */
+  const frameAncestors = process.env.SXM_FRAME_ANCESTORS;
+  if (frameAncestors !== 'off') {
+    if (frameAncestors === '*') {
+      res.setHeader('Content-Security-Policy', 'frame-ancestors *');
+    } else {
+      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      res.setHeader('Content-Security-Policy',
+        'frame-ancestors ' + (frameAncestors || "'self'"));
+    }
+  }
 
   // 请求日志挂在 finish 上：拿到的是最终状态码，而不是我们以为的那个
   res.on('finish', () => {

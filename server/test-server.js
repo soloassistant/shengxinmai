@@ -107,6 +107,27 @@ check(ran === ranExpected, '大淘客新版 signRan 拼接顺序 = appKey/timer/
 check(/^\d{6}$/.test(sign.makeNonce()), '大淘客 nonce 是 6 位数字');
 
 /* ==========================================================================
+   1.5 客户端地址：限流 key 取哪一段
+   --------------------------------------------------------------------------
+   X-Forwarded-For 是「逐跳追加」的：客户端可以自己写最左边那段。
+   取 [0] 的旧写法等于让攻击者每次换一个假 IP 绕开令牌桶，
+   还能把假 IP 写进日志。这条钉住「取最后一跳」。
+   ========================================================================== */
+say('\n— 客户端地址（限流 key 的取法）—');
+
+const { pickClientIp } = require('./lib/clientip');
+check(pickClientIp({}, '10.0.0.1') === '10.0.0.1', '没有 XFF 时用 socket 地址');
+check(pickClientIp({ 'x-forwarded-for': '1.2.3.4' }, '10.0.0.1') === '1.2.3.4',
+  '单段 XFF（代理整头重写的形态）取它');
+check(pickClientIp({ 'x-forwarded-for': '9.9.9.9, 5.6.7.8' }, '10.0.0.1') === '5.6.7.8',
+  '多段 XFF 取最后一跳 —— 伪造的第一段进不了限流 key 和日志');
+check(pickClientIp({ 'x-forwarded-for': ' , 5.6.7.8' }, '10.0.0.1') === '5.6.7.8',
+  '空段被跳过，不把空串当 IP');
+check(pickClientIp({ 'x-forwarded-for': '   ' }, '10.0.0.1') === '10.0.0.1',
+  '纯空白 XFF 等于没有，回退 socket 地址');
+check(pickClientIp(null, '10.0.0.1') === '10.0.0.1', 'headers 为 null 不炸');
+
+/* ==========================================================================
    2. 价格单位 —— 错了最贵的地方
    ========================================================================== */
 say('\n— 价格单位换算 —');
@@ -860,6 +881,48 @@ say('\n— 聚合并发 —');
 
       const r6 = await fetch(base + '/');
       check(!!r6.headers.get('etag'), 'index.html 也带 ETag');
+
+      /* ---- 响应压缩（gzip）与防点击劫持头 ----
+         app.js 原始 140+KB，gzip 后约 40KB —— 零依赖前提下对手机端
+         最大的加载提速。协商的每一条都要钉住：
+           · 认 gzip 才压（协商权在客户端）
+           · 二进制不压（再包一层只费 CPU 不省字节）
+           · ETag 不随传输编码变（身份仍是对未压缩内容的哈希）+ Vary 在
+         frame-ancestors 只能以响应头形式生效（meta CSP 表达不了），
+         所以有服务端的这套部署必须自己把防点击劫持补上。 */
+      const rg = await fetch(base + '/app.js', { headers: { 'Accept-Encoding': 'gzip' } });
+      check(rg.headers.get('content-encoding') === 'gzip', '认 gzip 的客户端拿到 app.js 压缩版');
+      check((rg.headers.get('vary') || '').includes('Accept-Encoding'),
+        '静态响应带 Vary: Accept-Encoding（中间代理据此区分缓存）');
+      check(rg.headers.get('etag') === etag, '压缩版的 ETag 与未压缩一致（身份不随传输编码变）');
+      const gzLen = Number(rg.headers.get('content-length'));
+      check(gzLen > 0 && gzLen < appBuf.length,
+        '压缩版确实更小（' + gzLen + ' B < 原始 ' + appBuf.length + ' B）');
+      const gzText = await rg.text();
+      check(gzText === appBuf.toString('utf8'), '解压后与磁盘原文逐字节一致（不能把坏数据发给客户端）');
+
+      const rid2 = await fetch(base + '/app.js', { headers: { 'Accept-Encoding': 'identity' } });
+      check(rid2.headers.get('content-encoding') == null, '不认 gzip 的客户端拿到原样字节');
+      check((await rid2.text()) === appBuf.toString('utf8'), 'identity 响应内容与磁盘文件一致');
+
+      const rp = await fetch(base + '/apple-touch-icon.png', { headers: { 'Accept-Encoding': 'gzip' } });
+      check(rp.status === 200 && rp.headers.get('content-encoding') == null,
+        'PNG 不做 gzip（已是压缩格式，再包一层白费 CPU）');
+
+      const rj = await fetch(base + '/api/health', { headers: { 'Accept-Encoding': 'gzip' } });
+      check(rj.headers.get('content-encoding') === 'gzip', '大体积 JSON 接口响应也压缩');
+      check((await rj.json()).ok === true, '压缩后的 JSON 解出来仍是有效数据');
+
+      check((r6.headers.get('x-frame-options') || '') === 'SAMEORIGIN',
+        'HTML 响应带 X-Frame-Options: SAMEORIGIN');
+      check((r6.headers.get('content-security-policy') || '').includes("frame-ancestors 'self'"),
+        '响应头 CSP 带 frame-ancestors —— meta CSP 做不到的那条由服务端补上');
+
+      /* 畸形百分号编码（/app.js%）：decodeURIComponent 会抛 URIError，
+         落到外层 catch 就成了 500「服务内部错误」。这是客户端的请求问题，
+         如实回 404，也别让 error 级日志被探测流量刷屏。 */
+      const rBadEnc = await fetch(base + '/app.js%');
+      check(rBadEnc.status === 404, '畸形 % 编码回 404 而不是 500（实际 ' + rBadEnc.status + '）');
 
       /* ---- 机票接口：没密钥时必须如实说，且绝不能给假价格 ---- */
       const fl = await (await fetch(base + '/api/flights?from=BJS&to=SHA&date=2026-10-20')).json();

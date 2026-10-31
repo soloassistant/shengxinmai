@@ -21,6 +21,14 @@ function createMetrics({ startedAt = Date.now() } = {}) {
   const byPath = new Map();
   const byPlatform = new Map();
 
+  /* byPath 的 key 来自请求的原始 pathname —— /api/* 是有限集合，
+     但 404 扫描（/x1、/x2、…）和探测请求的路径是**无限的**。
+     不设上限的话，Map 里每条路径都是一笔常驻内存，随机路径刷一遍就是
+     一次慢速内存泄漏；而限流桶（ratelimit.js）早有 maxKeys 硬上限，
+     指标这里不能是个例外。超出的路径全部并进 'other' 一条，
+     请求数 / 错误数照常累计，只是不再为每个新路径单开条目。 */
+  const PATH_CAP = 64;
+
   function bump(map, key, init) {
     if (!map.has(key)) map.set(key, init());
     return map.get(key);
@@ -30,7 +38,9 @@ function createMetrics({ startedAt = Date.now() } = {}) {
     requests++;
     totalMs += ms;
     if (status >= 500) errors++;
-    const r = bump(byPath, path, () => ({ path, count: 0, errors: 0, totalMs: 0 }));
+    let key = path;
+    if (!byPath.has(key) && byPath.size >= PATH_CAP) key = 'other';
+    const r = bump(byPath, key, () => ({ path: key, count: 0, errors: 0, totalMs: 0 }));
     r.count++;
     r.totalMs += ms;
     if (status >= 500) r.errors++;
