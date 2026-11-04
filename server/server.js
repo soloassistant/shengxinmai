@@ -190,7 +190,10 @@ function json(res, code, obj, rid, extra = {}) {
     res.writeHead(code, headers);
     return res.end();
   }
-  if (acceptsGzip(res.req) && body.length >= GZIP_MIN) {
+  /* 体积判定用字节数而不是 body.length：那是 UTF-16 字符数，
+     中文 JSON 在 UTF-8 里一个字 3 字节 —— 用字符数会把一段
+     实际 2KB 的中文响应误判成"不到 1KB"而跳过压缩。 */
+  if (acceptsGzip(res.req) && Buffer.byteLength(body) >= GZIP_MIN) {
     const zbuf = zlib.gzipSync(Buffer.from(body));
     headers['Content-Encoding'] = 'gzip';
     headers['Content-Length'] = zbuf.length;
@@ -327,6 +330,13 @@ function serveStatic(req, res, urlPath) {
 }
 
 /* ---------- 比价（缓存 + 历史采集 + 指标） ---------- */
+/* in-flight 去重：TTL 缓存只挡得住「上一个请求已经完成」的重复。
+   同一瞬间并发来的相同关键词（清单一次 N 件里的重复词、两个人同时搜同一句）
+   在那一刻全部 miss，会各自真打一轮平台接口 —— 联盟配额被成倍烧掉，
+   还可能被平台判定异常流量。同一 key 的并发请求共用同一个 promise：
+   第一个到的真正去问，其余的等它的结果。请求落定（成功或失败）即拆桥。 */
+const INFLIGHT = new Map();
+
 async function getCompare(keyword, rid) {
   const key = 'cmp:' + normKey(keyword);
   const hit = cache.get(key);
@@ -334,39 +344,43 @@ async function getCompare(keyword, rid) {
     log.debug('compare.cacheHit', { rid, q: keyword });
     return { ...hit, cached: true };
   }
+  if (INFLIGHT.has(key)) return INFLIGHT.get(key);
+  const p = (async () => {
+    const data = await compare(keyword, process.env, { pageSize: 20, keep: 8 });
 
-  const data = await compare(keyword, process.env, { pageSize: 20, keep: 8 });
+    // 每个平台的调用结果都要进指标，否则"哪个平台在拖后腿"永远只是感觉
+    data.platforms.forEach((x) => metrics.platform(x.id, !!x.ok, x.ms || 0));
 
-  // 每个平台的调用结果都要进指标，否则"哪个平台在拖后腿"永远只是感觉
-  data.platforms.forEach((x) => metrics.platform(x.id, !!x.ok, x.ms || 0));
+    // 采集价格历史。这是我们唯一的历史价来源：只记真实看到的价，一次一条。
+    const recorded = store.recordCompare(data);
+    if (recorded) log.info('price.recorded', { rid, q: keyword, points: recorded });
 
-  // 采集价格历史。这是我们唯一的历史价来源：只记真实看到的价，一次一条。
-  const recorded = store.recordCompare(data);
-  if (recorded) log.info('price.recorded', { rid, q: keyword, points: recorded });
+    /* 把历史摘要挂到每个平台的「最低价」上。
+       只挂 lowest 而不挂 items 全部：既避免前端 N+1 请求，也避免响应体膨胀。
+       用户真正会盯的就是最低价那一条，其余等他点开再单独查。 */
+    data.platforms.forEach((x) => {
+      if (!x.ok || !x.lowest || x.lowest.final == null) return;
+      const sku = x.lowest.sku || titleFingerprint(x.lowest.title);
+      if (!sku) return;
+      const h = store.history(x.id, sku);
+      if (!h.found) return;
+      x.lowest.history = {
+        count: h.count,
+        lowest: h.lowest,
+        highest: h.highest,
+        latest: h.latest,
+        verdict: h.verdict,
+        verdictText: h.verdictText,
+        points: h.points.slice(-24)     // 曲线只画最近 24 个点：够看趋势，也不撑大响应
+      };
+    });
 
-  /* 把历史摘要挂到每个平台的「最低价」上。
-     只挂 lowest 而不挂 items 全部：既避免前端 N+1 请求，也避免响应体膨胀。
-     用户真正会盯的就是最低价那一条，其余等他点开再单独查。 */
-  data.platforms.forEach((x) => {
-    if (!x.ok || !x.lowest || x.lowest.final == null) return;
-    const sku = x.lowest.sku || titleFingerprint(x.lowest.title);
-    if (!sku) return;
-    const h = store.history(x.id, sku);
-    if (!h.found) return;
-    x.lowest.history = {
-      count: h.count,
-      lowest: h.lowest,
-      highest: h.highest,
-      latest: h.latest,
-      verdict: h.verdict,
-      verdictText: h.verdictText,
-      points: h.points.slice(-24)     // 曲线只画最近 24 个点：够看趋势，也不撑大响应
-    };
-  });
-
-  data.cached = false;
-  cache.set(key, data);
-  return data;
+    data.cached = false;
+    cache.set(key, data);
+    return data;
+  })().finally(() => { INFLIGHT.delete(key); });
+  INFLIGHT.set(key, p);
+  return p;
 }
 
 /* ---------- 机票（按航线查，不走关键词） ----------
@@ -381,40 +395,44 @@ async function getFlights(q, rid) {
     log.debug('flights.cacheHit', { rid, from: q.from, to: q.to });
     return { ...hit, cached: true };
   }
+  if (INFLIGHT.has(key)) return INFLIGHT.get(key);
+  const p = (async () => {
+    const adapter = flightAdapter;
+    if (!adapter.isConfigured(process.env)) {
+      // 没密钥就如实说，不给假价格 —— 前端据此退回「手动查」入口
+      const data = {
+        ok: true,
+        configured: false,
+        query: q,
+        flights: [],
+        note: '机票实时报价未接入。配置 IGNAV_API_KEY 后这里会返回按价格排好序的航班表。',
+        platforms: FLIGHT_PLATFORMS_FALLBACK
+      };
+      cache.set(key, data);
+      return { ...data, cached: false };
+    }
 
-  const adapter = flightAdapter;
-  if (!adapter.isConfigured(process.env)) {
-    // 没密钥就如实说，不给假价格 —— 前端据此退回「手动查」入口
+    const r = await adapter.searchRoute(q, process.env);
     const data = {
       ok: true,
-      configured: false,
+      configured: true,
       query: q,
-      flights: [],
-      note: '机票实时报价未接入。配置 IGNAV_API_KEY 后这里会返回按价格排好序的航班表。',
-      platforms: FLIGHT_PLATFORMS_FALLBACK
+      at: r.at || Date.now(),
+      market: r.market || q.market || 'CN',
+      count: (r.items || []).length,
+      flights: r.items || [],
+      note: r.note || '',
+      unconfigured: !!r.unconfigured
     };
-    cache.set(key, data);
-    return { ...data, cached: false };
-  }
+    metrics.platform(adapter.id, !r.note || !!r.items.length, 0);
 
-  const r = await adapter.searchRoute(q, process.env);
-  const data = {
-    ok: true,
-    configured: true,
-    query: q,
-    at: r.at || Date.now(),
-    market: r.market || q.market || 'CN',
-    count: (r.items || []).length,
-    flights: r.items || [],
-    note: r.note || '',
-    unconfigured: !!r.unconfigured
-  };
-  metrics.platform(adapter.id, !r.note || !!r.items.length, 0);
-
-  /* 没数据时不缓存 —— 缓存一个空结果会把"临时故障"钉死几分钟，
-     用户重试也还是空的，看起来就像坏了。有数据才缓存。 */
-  if (data.flights.length) cache.set(key, data);
-  return data;
+    /* 没数据时不缓存 —— 缓存一个空结果会把"临时故障"钉死几分钟，
+       用户重试也还是空的，看起来就像坏了。有数据才缓存。 */
+    if (data.flights.length) cache.set(key, data);
+    return data;
+  })().finally(() => { INFLIGHT.delete(key); });
+  INFLIGHT.set(key, p);
+  return p;
 }
 
 /* ---------- 路由 ---------- */

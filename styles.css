@@ -65,7 +65,8 @@ p{ margin:0; }
   backdrop-filter:saturate(180%) blur(12px);
   border-bottom:1px solid var(--line-soft);
 }
-.brand{ display:flex; align-items:center; gap:10px; }
+/* flex-shrink:0：极窄屏下右侧按钮组换行时，品牌名不能被挤成「省心/买」两行 */
+.brand{ display:flex; align-items:center; gap:10px; flex-shrink:0; }
 .brand-mark{
   width:34px; height:34px; border-radius:10px;
   background:linear-gradient(135deg,#FF7A45,#FF4D2E);
@@ -82,6 +83,10 @@ p{ margin:0; }
   background:var(--surface); border:1px solid var(--line);
   font-size:12.5px; color:var(--ink-2); font-weight:500;
   box-shadow:var(--shadow-1);
+  /* 顶栏按钮（「主题：自动」「接入状态」）在 414px 手机宽度下已贴满一行，
+     不锁 nowrap 会在词中间折行（「主题：自/动」）——看起来像坏了。
+     真放不下时由 .topbar-right 整枚按钮换行，而不是把字撕开。 */
+  white-space:nowrap;
 }
 .ghost-btn:active{ transform:scale(.97); }
 .dot{ width:7px; height:7px; border-radius:50%; background:var(--warn); display:inline-block; }
@@ -621,7 +626,9 @@ p{ margin:0; }
 :root[data-theme="dark"] .pf{ filter:saturate(.86) brightness(.94); }
 
 /* ---------- 主题切换按钮 ---------- */
-.topbar-right{ display:flex; align-items:center; gap:8px; }
+/* flex-wrap：极窄屏（320px）下按钮装不下时整枚折到第二行，
+   配合 .ghost-btn 的 nowrap —— 永远不会出现词中间被撕开的按钮。 */
+.topbar-right{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; row-gap:6px; justify-content:flex-end; }
 .icon-btn{
   width:34px; height:34px; border-radius:10px;
   display:grid; place-items:center; font-size:15px; line-height:1;
