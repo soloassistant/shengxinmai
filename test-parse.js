@@ -324,6 +324,29 @@ const dirty = SXM.renderFlightTable({ ok: true, flights: [{ price: null, carrier
 if (typeof dirty === 'string' && dirty.includes('¥500')) { pass++; say('✓  混入脏数据时，好数据照样渲染'); }
 else { fail++; say('✗  脏数据把航班表搞崩了'); }
 
+/* ---------- 机场三字码：错一个码，整条航线直接查无此航班 ---------- */
+/* 2026-10-31 修了三处错码（杭州 hna→hgh、温州 wzn→wnz、珠海 zui→zuh）。
+   这类错的杀伤面比看上去大：它同时污染**卡片上显示的三字码**和**查询参数
+   from/to**，而机场查无此码时上游不是报错、是回空列表 —— 用户看到的只是
+   「今天没航班」，没有任何线索指向"码写错了"。所以码表必须被断言钉住。
+   三条具体值 + 两条表级不变量（长度/大小写、无重复）—— 后者挡的是"新加城市时
+   手滑写错"这一类，不只是这次修过的三个。 */
+say('\n— 机场三字码 —');
+const CITY_AIR = vm.runInContext('CITY_AIR', sandbox);
+const airCases = [['杭州', 'hgh'], ['温州', 'wnz'], ['珠海', 'zuh'], ['北京', 'bjs'], ['上海', 'sha']];
+const airBad = airCases.filter(([city, code]) => CITY_AIR[city] !== code);
+if (airBad.length === 0) { pass++; say('✓  抽查的城市三字码都对（含 2026-10-31 修的杭州/温州/珠海）'); }
+else { fail++; say('✗  三字码错：' + airBad.map(([c, code]) => c + ' 应为 ' + code + '、实际 ' + CITY_AIR[c]).join('；')); }
+
+const airEntries = Object.entries(CITY_AIR);
+const airMalformed = airEntries.filter(([, code]) => !/^[a-z]{3}$/.test(String(code)));
+if (airMalformed.length === 0) { pass++; say('✓  ' + airEntries.length + ' 个城市的三字码全是 3 位小写字母'); }
+else { fail++; say('✗  三字码格式不对：' + airMalformed.map(([c, v]) => c + '=' + v).join('、')); }
+
+const airDup = airEntries.map(([, c]) => c).filter((c, i, a) => a.indexOf(c) !== i);
+if (airDup.length === 0) { pass++; say('✓  没有两个城市共用同一个三字码（共用必有一方是错的）'); }
+else { fail++; say('✗  三字码重复：' + airDup.join('、')); }
+
 /* ---------- 距离计算：拿真实距离做基准，不对就是公式写错了 ---------- */
 say('\n— 城市距离（大圆距离，与公开真实值比对）—');
 const CITY_GEO = SXM.CITY_GEO;

@@ -345,6 +345,38 @@ const contrast = (a, b) => {
       '--ink-3 落在真实底色上达到 WCAG AA（' + (vars.theme || '?') + ' 主题）',
       worst ? ('最差 ' + worst.n + ' = ' + worst.r.toFixed(2) + ':1') : '取不到颜色值');
 
+    /* ==================== F 窄屏：按钮不许把词撕开 ====================
+       styles.css 给 .ghost-btn 加了 white-space:nowrap、给 .topbar-right 加了 flex-wrap，
+       注释承诺「装不下时整枚按钮换行，而不是把字撕开」。
+       ⚠ 变异实验的结论（别把归功搞错）：把 nowrap 撤掉后，280 / 300 / 320 / 360 / 414
+       五档量出来的结果**完全一致**（按钮恒 33px、scrollWidth == 视口）—— 在当前文案下
+       这条规则是纯防御性的、没有可观测效果。所以下面三条断言守的是**结果**
+       （不横向溢出、按钮单行、品牌名不被挤成两行），不是 nowrap 本身。
+       它们仍有价值：文案哪天变长（「接入状态」→「数据源：0 个已配置」）就会真的触发。 */
+    const narrow = async (w) => {
+      await page.setViewportSize({ width: w, height: 720 });
+      await page.waitForTimeout(260);
+      return page.evaluate(() => {
+        const btns = [...document.querySelectorAll('.ghost-btn')].map((b) => Math.round(b.getBoundingClientRect().height));
+        const brand = document.querySelector('.brand');
+        return {
+          docW: document.documentElement.scrollWidth,
+          winW: innerWidth,
+          maxBtnH: btns.length ? Math.max(...btns) : 0,
+          brandH: brand ? Math.round(brand.getBoundingClientRect().height) : 0
+        };
+      });
+    };
+    const n320 = await narrow(320);
+    rec(n320.docW <= n320.winW, '320px 窄屏无横向溢出', 'scrollWidth=' + n320.docW + ' / 视口=' + n320.winW);
+    rec(n320.maxBtnH > 0 && n320.maxBtnH <= 40, '320px 下顶栏按钮仍是单行（装不下时整枚换行，不把词撕开）',
+      '最高按钮 ' + n320.maxBtnH + 'px');
+    const n414 = await narrow(414);
+    rec(n414.docW <= n414.winW && n414.maxBtnH <= 40 && n414.brandH <= 40,
+      '414px 下顶栏一行放得下：按钮单行、品牌名没被挤成两行',
+      '按钮 ' + n414.maxBtnH + 'px / 品牌 ' + n414.brandH + 'px / scrollWidth=' + n414.docW);
+    await page.setViewportSize({ width: 1280, height: 800 });
+
     /* ==================== 通用：零 pageerror / 零失败请求 ==================== */
     const clean = problems.filter((p) => !/Failed to load resource.*404/.test(p));
     rec(clean.length === 0, '全程零 pageerror / 零请求失败',

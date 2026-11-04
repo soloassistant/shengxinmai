@@ -781,6 +781,42 @@ say('\n— 聚合并发 —');
         && Array.isArray(met.platforms),
         '/api/metrics 仍带齐抽屉真正消费的 5 个字段（ok / requests / errors / rateLimited / avgMs / platforms）');
 
+      /* ---- gzip 阈值按「字节」判，不按「字符数」判（2026-10-31） ----
+         `body.length` 是 UTF-16 字符数，中文在 UTF-8 里一个字 3 字节 ——
+         一段实际 1.5KB 的中文响应会被当成"不到 1KB"而跳过压缩。
+         判据刻意不写死"这条必须压/必须不压"，而是**拿真实字节数与 1024 当场比**：
+         内容以后怎么变，断言的含义都不变（不会因为改了一句文案就假红）。
+         标注两个数字是为了留证据：只有当 chars<1024 且 bytes≥1024 时，
+         这条才真正站在新旧逻辑的分界线上。 */
+      const GZ_MIN = 1024;
+      const gzProbe = async (q) => {
+        const r = await fetch(base + '/api/compare?q=' + encodeURIComponent(q), {
+          headers: { 'accept-encoding': 'gzip' }
+        });
+        const t = await r.text();   // fetch 自动解压，拿到的是原文
+        return { chars: t.length, bytes: Buffer.byteLength(t), enc: (r.headers.get('content-encoding') || '').toLowerCase() };
+      };
+      const gzA = await gzProbe('耳机');
+      check(gzA.bytes >= GZ_MIN ? gzA.enc === 'gzip' : gzA.enc !== 'gzip',
+        'gzip 阈值按字节判定：' + gzA.bytes + ' 字节 / ' + gzA.chars + ' 字符 ⇒ '
+        + (gzA.bytes >= GZ_MIN ? '应压缩' : '不该压缩') + '，实际 ' + (gzA.enc || '未压缩'));
+      check(gzA.bytes >= GZ_MIN && gzA.chars < GZ_MIN,
+        '这一条确实站在新旧逻辑的分界线上（字节过线、字符没过）——否则它证明不了这次修复');
+
+      /* ---- 并发同词去重：同一 key 的并发请求只真打一轮平台接口 ----
+         为什么这条只能做「结构钉」而不做行为断言：零密钥时 compare() 不产出任何
+         平台结果，`metrics.platform()` 一次都不会被调用 ⇒ 适配器调用次数在外部
+         根本观测不到（配一个假 key 会真的打到平台，那是更坏的选择）。
+         所以退一步，钉住"去重与拆桥都还在"这两处结构：少任何一处，要么配额被
+         并发成倍烧掉，要么 INFLIGHT 里留下永不释放的 promise（慢速内存泄漏）。 */
+      const srvSrc = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
+      const dedupHas = (srvSrc.match(/if \(INFLIGHT\.has\(key\)\) return INFLIGHT\.get\(key\);/g) || []).length;
+      const dedupSet = (srvSrc.match(/INFLIGHT\.set\(key, p\);/g) || []).length;
+      const dedupDel = (srvSrc.match(/finally\(\(\) => \{ INFLIGHT\.delete\(key\); \}\)/g) || []).length;
+      check(dedupHas === 2 && dedupSet === 2 && dedupDel === 2,
+        '比价与机票都保留了并发去重 + 落定即拆桥（各 2 处：查 / 登记 / finally 删除）'
+        + '，实际 has=' + dedupHas + ' set=' + dedupSet + ' delete=' + dedupDel);
+
       const page = await fetch(base + '/');
       const html = await page.text();
       check(page.ok && html.includes('省心买'), '根路径能正常返回页面');
