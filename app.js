@@ -2617,18 +2617,18 @@
   function adapterStatus(a) {
     const impl = sourceImplemented(a);
     if (a.live) {
-      return { tag: '已接入', ico: '✓', icoBg: '#12A150', tagCls: 'tag-ok',
+      return { tag: '已接入', ico: '✓', icoBg: '#0B7A3B', icoInk: '#FFFFFF', tagCls: 'tag-ok',
                text: '密钥已配置，比价会走这个平台' };
     }
     if (impl === false) {
-      return { tag: '规划中', ico: '·', icoBg: '#C6CDD8', tagCls: 'tag-mute',
+      return { tag: '规划中', ico: '·', icoBg: '#C6CDD8', icoInk: '#4A525F', tagCls: 'tag-mute',
                text: '当前版本未实现，配了 key 也不会生效' };
     }
     if (impl === true) {
-      return { tag: '未接入', ico: '—', icoBg: '#5F6773', tagCls: 'tag-mute',
+      return { tag: '未接入', ico: '—', icoBg: '#5F6773', icoInk: '#FFFFFF', tagCls: 'tag-mute',
                text: '还没配密钥，配上就能用' };
     }
-    return { tag: '未接入', ico: '?', icoBg: '#5F6773', tagCls: 'tag-mute',
+    return { tag: '未接入', ico: '?', icoBg: '#5F6773', icoInk: '#FFFFFF', tagCls: 'tag-mute',
              text: '需服务端才能接入（当前是纯前端模式）' };
   }
 
@@ -2644,7 +2644,7 @@
       const s = adapterStatus(a);
       return `
       <div class="plat-row">
-        <div class="pf" style="background:${s.icoBg}">${s.ico}</div>
+        <div class="pf" style="background:${s.icoBg};color:${s.icoInk}">${s.ico}</div>
         <div class="row-main">
           <div class="row-name">${esc(a.name)}</div>
           <div class="row-desc">${esc(a.scope)} · ${esc(a.person)}</div>
