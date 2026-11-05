@@ -1034,9 +1034,12 @@
       <select class="mb-pf" aria-label="${esc(q)} 的平台">${SHOP_PLATFORMS.map((p) =>
         `<option value="${p.id}"${p.id === offer.platform ? ' selected' : ''}>${esc(p.name)}</option>`
       ).join('')}</select>
-      <input class="mb-price" type="number" inputmode="decimal" min="0" step="0.01"
-        value="${offer.price == null ? '' : esc(offer.price)}" placeholder="到手价"
-        aria-label="${esc(q)} 的到手价">
+      <div class="mb-price-wrap">
+        <input class="mb-price" type="text" inputmode="decimal" autocomplete="off"
+          value="${offer.price == null ? '' : esc(offer.price)}" placeholder="到手价"
+          aria-label="${esc(q)} 的到手价">
+        <span class="mb-err" role="alert"></span>
+      </div>
     </div>`;
   }
 
@@ -1082,6 +1085,16 @@
       [...card.querySelectorAll('.mb-item')].forEach((row, i) => {
         row.querySelector('[data-mb-best]').innerHTML =
           SXMManual.itemBestText(res.items[i] && res.items[i].best, nameOf);
+      });
+      /* 每一格都当场回话：能不能用、为什么不能用。原来 type=number 会把
+         「¥1,299.00」这类粘贴值直接吐成空串，非法值又被当成"没填" —— 全静默。 */
+      [...card.querySelectorAll('.mb-offer')].forEach((o) => {
+        const inp = o.querySelector('.mb-price');
+        if (!inp) return;
+        const p = SXMManual.parsePrice(inp.value);
+        inp.setAttribute('aria-invalid', p.error ? 'true' : 'false');
+        const box = o.querySelector('.mb-err');
+        if (box) box.textContent = p.error;
       });
       mbSave(items);
     };
