@@ -1733,8 +1733,8 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   ])));
   SXM.openDrawer();
   const watchRowHtml = sandbox.document.getElementById('drawer-body').innerHTML;
-  chk(wImported === 1 && watchRowHtml.indexOf('淘宝 / 天猫 · 关注时最低') !== -1,
-    '关注列表里 dataoke 的平台名显示为「淘宝 / 天猫」，不是内部的「大淘客」（导入 ' + wImported + ' 条）');
+  chk(wImported === 1 && watchRowHtml.indexOf('淘宝 / 天猫 · 记下时 ¥') !== -1,
+    '记下的商品里 dataoke 的平台名显示为「淘宝 / 天猫」，不是内部的「大淘客」（导入 ' + wImported + ' 条）');
   SXM.closeDrawer();
 
   /* ---------- 唯一会"抛"的那处：data.unconfigured 裸访问（2026-10-08） ----------
@@ -1944,8 +1944,8 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   });
   chk(liveMiss.indexOf('undefined') === -1,
     '比价卡：平台名 / 商品名 / 关注记录 / 免责说明缺失时，输出里不出现字面量 undefined');
-  chk(liveMiss.indexOf('降价提醒') !== -1,
-    '比价卡：缺 q 的关注记录照样能出降价提醒（不因为字段缺就整条不画）');
+  chk(liveMiss.indexOf('比记下时更低了') !== -1,
+    '比价卡：缺 q 的记录照样能和记下的价比一次（不因为字段缺就整条不画）');
   chk(liveMiss.indexOf('这些平台还没配密钥') !== -1,
     '比价卡：unconfigured 项缺 name 时提示照出（空名字也不该让整行消失）');
   sandbox.localStorage.removeItem(WATCH_KEY);
