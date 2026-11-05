@@ -972,7 +972,7 @@
 
     const rows = queries.map((q) => `
       <div class="basket-item">
-        <div><div class="bi-q">${esc(q)}</div><div class="bi-sub">本地算不了总账，先去平台看实时价</div></div>
+        <div><div class="bi-q">${esc(q)}</div><div class="bi-sub">本地拿不到实时价：可以去平台看，也可以手填到手价算总账</div></div>
         <div class="bi-links">${linksFor(q)}</div>
       </div>`).join('');
 
@@ -2371,7 +2371,7 @@
     if (watchBtn) {
       const ds = watchBtn.dataset;
       watchAdd({ q: ds.q, platform: ds.platform, sku: ds.sku, title: ds.title, price: ds.price });
-      showToast('已关注「' + ds.q + '」，下次比价发现降价会提醒你');
+      showToast('已关注「' + ds.q + '」，下次比价拿到真实价格时，若降价会提醒你');
       return;
     }
 
@@ -2690,7 +2690,7 @@
               data-watch-remove="1" data-q="${esc(w.qKey)}" data-platform="${esc(w.platform)}">删除</button>
           </div>
         </div>`).join('')}
-      <div class="fine" style="margin:8px 0 0">下次比价时发现降价，会在结果卡顶部提醒你。提醒一次后记录更新为当前价，再降再提。</div>` : '';
+      <div class="fine" style="margin:8px 0 0">下次比价且服务端返回真实价格时，若降价会在结果卡顶部提醒你。提醒一次后记录更新为当前价，再降再提；拿不到真实价格就不会提醒。</div>` : '';
 
     /* 换设备迁移：导出/导入同步码。没有关注时只给导入，别给一个复制空列表的按钮。 */
     const syncBlock = `

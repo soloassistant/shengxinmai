@@ -15,9 +15,9 @@
      这里钉 GitHub Pages：它是 README 里的「在线版」，也是两套里**耐久**的那套
      （另一个是沙箱部署，被回收的话所有已经发出去的分享卡片都会掉图）。
      分享带服务端的那个地址一样能出卡片，只是缩略图从这边取 —— 同一个文件。 -->
-<meta name="description" content="说一句人话，横向拉平各平台到手价；一份清单算清该分几家买。不代下单、不代支付。">
+<meta name="description" content="说一句人话，把各平台搜索与比价入口一次摆好；清单按你填的到手价算清该分几家买。不代下单、不代支付。">
 <meta property="og:title" content="省心买 · AI 比价与出行助手">
-<meta property="og:description" content="贴一句商品名，横向拉平各平台到手价。把比价链接发给朋友，打开就自动比。">
+<meta property="og:description" content="贴一句商品名，把各平台搜索与比价入口一次摆好。把链接发给朋友，打开就自动重查。">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="省心买">
 <meta property="og:locale" content="zh_CN">
@@ -27,11 +27,11 @@
      alt 是给读屏和抓不到的降级用的。 -->
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="省心买 —— 说一句人话，我把该比的都给你比了">
+<meta property="og:image:alt" content="省心买 —— 说一句人话，我把该比的入口都给你摆好了">
 <!-- 不给 twitter:card 的话，X/推特会把 1200×630 裁成一个小方图 -->
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="省心买 · AI 比价与出行助手">
-<meta name="twitter:description" content="贴一句商品名，横向拉平各平台到手价。把比价链接发给朋友，打开就自动比。">
+<meta name="twitter:description" content="贴一句商品名，把各平台搜索与比价入口一次摆好。把链接发给朋友，打开就自动重查。">
 <meta name="twitter:image" content="https://soloassistant.github.io/shengxinmai/og-image.png">
 <link rel="canonical" href="https://soloassistant.github.io/shengxinmai/">
 
@@ -141,27 +141,27 @@
     <!-- 欢迎卡 -->
     <section class="msg msg-ai" id="welcome">
       <div class="bubble bubble-ai">
-        <h1 class="lead">说一句人话，我把该比的都给你比了。</h1>
+        <h1 class="lead">说一句人话，我把该比的入口都给你摆好了。</h1>
         <div class="cap-grid">
           <button class="cap" data-demo="帮我买 AirPods Pro 3">
             <span class="cap-ico ico-shop">比</span>
             <span class="cap-t">电商比价</span>
-            <span class="cap-d">贴一句商品名，横向拉平各平台到手价</span>
+            <span class="cap-d">贴一句商品名，各平台搜索页一次摆好，价格以平台页为准</span>
           </button>
           <button class="cap" data-demo="明天北京到上海的高铁">
             <span class="cap-ico ico-trip">行</span>
             <span class="cap-t">机票火车票</span>
-            <span class="cap-d">给出发地目的地和日期，直达官方购票页</span>
+            <span class="cap-d">给出发地目的地和日期，直达购票/比价页（火车票走 12306 官方）</span>
           </button>
           <button class="cap" data-demo="想点个麻辣烫外卖">
             <span class="cap-ico ico-food">吃</span>
             <span class="cap-t">外卖领券</span>
-            <span class="cap-d">先领红包再下单，同店能省一顿的钱</span>
+            <span class="cap-d">先领红包再下单，能省一点是一点</span>
           </button>
           <button class="cap cap-wide" data-open="basket">
             <span class="cap-ico ico-list">单</span>
             <span class="cap-t">省钱清单</span>
-            <span class="cap-d">要买好几样？先算清楚该分几家买、能省多少</span>
+            <span class="cap-d">要买好几样？填上到手价，算清该分几家买</span>
           </button>
         </div>
         <p class="fine">我不会替你付款，也不会碰你的账号。比完价、领完券，下单还是走平台官方 App —— 这是唯一安全也不违规的做法。</p>
@@ -221,7 +221,7 @@
       <label class="fine" for="basket-text">一行一件，最多 <span id="basket-max">8</span> 件</label>
       <textarea id="basket-text" placeholder="猫粮&#10;洗衣液&#10;AirPods Pro 3"></textarea>
       <p class="basket-hint">
-        我会逐件比价，然后回答一个问题：<strong>该分几家买，还是一家买齐？</strong><br>
+        我会逐件把各平台入口摆好；你填上到手价，就能看到<strong>该分几家买，还是一家买齐</strong>。<br>
         差额小于麻烦门槛（默认 ¥<span id="basket-th">10</span>）时我会建议你图省事——为省三块钱多装两个 App，多数人不划算。
       </p>
       <div class="basket-bar">
@@ -231,7 +231,7 @@
     </div>
   </div>
   <div class="drawer-foot">
-    <p>清单只算<strong>各平台最低到手价</strong>之和，不含运费。合并下单时运费可能把差价再拉平一次，<strong>下单页要自己看一眼运费</strong>。</p>
+    <p>清单只算<strong>到手价之和</strong>，不含运费：接上服务端时用各平台最低到手价，手动填写时用你填的价。合并下单时运费可能把差价再拉平一次，<strong>下单页要自己看一眼运费</strong>。</p>
   </div>
 </aside>
 
