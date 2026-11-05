@@ -601,7 +601,7 @@
         同一件东西在两家店的差距通常就藏在这四项里。商品页和结算页都看一眼，才算真比过。</span>
       </div>
       <div class="card-actions">
-        <button class="copy-btn" type="button" data-share="${esc(intent.product)}">分享链接</button>
+        <button class="copy-btn" type="button" data-share="${esc(intent.product)}">复制链接</button>
       </div>`;
   }
 
@@ -700,7 +700,7 @@
         watchRemove(w.qKey, w.platform);
         watchAdd({ q: w.q, platform: w.platform, sku: w.sku, title: w.title, price: p.lowest.final });
         return `<div class="banner banner-ok watch-banner"><span class="banner-ico">↓</span>
-          <span>降价提醒：「${esc(w.q || '')}」在${esc(p.name || '')}从 ¥${fmtPrice(w.price)}
+          <span>比记下时更低了：「${esc(w.q || '')}」在${esc(p.name || '')}从 ¥${fmtPrice(w.price)}
           降到 <b>¥${fmtPrice(p.lowest.final)}</b>，比上次记录便宜 ¥${fmtPrice(drop.saved)}。</span></div>`;
       }).join('');
     }
@@ -732,7 +732,7 @@
           data-q="${esc(product)}" data-platform="${esc(p.id || '')}" data-plat-name="${esc(p.name || '')}"
           data-sku="${esc((p.lowest && p.lowest.sku) || '')}"
           data-title="${esc((p.lowest && p.lowest.title) || '')}"
-          data-price="${esc(String((p.lowest && p.lowest.final) || ''))}">关注降价</button>` : '';
+          data-price="${esc(String((p.lowest && p.lowest.final) || ''))}">记下这件</button>` : '';
 
       /* 缩略图占掉原本平台图标那一列：平台名已经写在上面的 .live-plat 里，
          行内不必再放一遍平台图标。有图走默认三列，没图才收成两列。 */
@@ -830,7 +830,7 @@
       ${idle}
       <div class="card-actions">
         <button class="copy-btn" type="button" data-share="${esc(product)}"
-          data-share-demo="${isDemo ? '1' : ''}">分享链接</button>
+          data-share-demo="${isDemo ? '1' : ''}">复制链接</button>
         <button class="copy-btn" type="button" data-copy="${copyId}">复制结果</button>
       </div>`;
   }
@@ -1502,7 +1502,7 @@
    * @param {string=} retryFor     传了就把「重试」按钮指向这句原始输入
    * @param {boolean=} retryBasket 传 true 则「重试」指向"重算上一次的清单"
    */
-  function appendAI(html, retryFor, retryBasket) {
+  function appendCard(html, retryFor, retryBasket) {
     const el = document.createElement('section');
     el.className = 'msg msg-ai';
     el.innerHTML = `<div class="bubble bubble-ai">${html}</div>`;
@@ -1525,7 +1525,7 @@
       /* 淘口令周边几乎全是"复制这条信息/打开手机淘宝"这类套话，
          不是商品名 —— 实测把套话送进比价流会出一张垃圾卡。
          所以口令一律给识别卡，引导用户发商品名。 */
-      if (share.kind === 'tpwd') { appendAI(renderShareParsed(share)); return; }
+      if (share.kind === 'tpwd') { appendCard(renderShareParsed(share)); return; }
       const rest = stripUrlText(text);
       if (share.kind === 'keyword') {
         intent = { type: 'shop', product: share.keyword };
@@ -1534,7 +1534,7 @@
         // 会被当成商品名送进比价流，出一张垃圾卡
         intent = { type: 'shop', product: rest };
       } else {
-        appendAI(renderShareParsed(share));
+        appendCard(renderShareParsed(share));
         return;
       }
     }
@@ -1542,9 +1542,9 @@
     if (!intent) return;
 
     /* 信息不够就反问，不拿套话当商品名去问平台 */
-    if (intent.type === 'needProduct') { appendAI(renderNeedProduct()); return; }
-    if (intent.type === 'needRoute')   { appendAI(renderNeedRoute(intent.cities)); return; }
-    if (intent.type === 'needDate')    { appendAI(renderNeedDate(intent.date)); return; }
+    if (intent.type === 'needProduct') { appendCard(renderNeedProduct()); return; }
+    if (intent.type === 'needRoute')   { appendCard(renderNeedRoute(intent.cities)); return; }
+    if (intent.type === 'needDate')    { appendCard(renderNeedDate(intent.date)); return; }
 
     if (intent.type === 'shop') {
       /* 演示模式排在最前：样例是本地按商品名生成的，**没有任何理由先打一轮网络**。
@@ -1553,14 +1553,14 @@
          （真实数据总会抢先）。卡片照样会标明「演示数据 · 非实时」。 */
       if (DEMO_MODE) {
         const dd = demoLive(intent.product);
-        appendAI(renderShopLive(intent.product, dd));
+        appendCard(renderShopLive(intent.product, dd));
         return;
       }
 
       // 先试服务端的真实比价；拿不到就退回手动比价 —— 无论如何都不编数字
       const live = await liveCompare(intent.product);
       if (live) {
-        appendAI(renderShopLive(intent.product, live));
+        appendCard(renderShopLive(intent.product, live));
         return;
       }
 
@@ -1572,10 +1572,10 @@
           + '。可以稍后再试一次，或点右上角看「接入状态」。'
         : '';
 
-      appendAI(renderShop(intent, warn));
+      appendCard(renderShop(intent, warn));
       return;
     }
-    appendAI(intent.type === 'food' ? renderFood(intent) : renderRoute(intent));
+    appendCard(intent.type === 'food' ? renderFood(intent) : renderRoute(intent));
   }
 
   function ask(text) {
@@ -1600,7 +1600,7 @@
         await handle(text);
       } catch (e) {
         // 带上 retryFor，用户点「重试」就是原样再问一次，不用重新打字
-        appendAI(renderError('这一步没走通', String((e && e.message) || e)), text);
+        appendCard(renderError('这一步没走通', String((e && e.message) || e)), text);
       } finally {
         loading.remove();
         // 输入框在提交时已清空，按「有没有字」恢复发送键状态，而不是无条件点亮
@@ -1611,10 +1611,10 @@
   }
 
   /* ======================================================================
-     7.4b 最近查询 / 复制结果 / 降价关注
+     7.4b 最近查询 / 复制结果 / 记下的商品
      ----------------------------------------------------------------------
      三件小事共用一个原则：**只存用户真的见过的东西。**
-     最近查询存原文；降价关注存自己比出来的价——绝不预填任何"市场价"、
+     最近查询存原文；记下的商品存自己比出来的价——绝不预填任何"市场价"、
      也绝不根据名字猜一条历史来算"降了多少"，没有记录就没有提醒。
      ====================================================================== */
   const RECENT_KEY = 'sxm.recent';
@@ -1751,7 +1751,7 @@
       `<button class="chip chip-recent" type="button" data-recent="${esc(q)}" title="再查一次">${esc(q)}</button>`).join('');
   }
 
-  /* ---------- 降价关注 ---------- */
+  /* ---------- 记下的商品 ---------- */
   function watchList() { return lsGet(WATCH_KEY) || []; }
 
   /** 纯函数：新增/更新一条关注。同一商品+同一平台算同一条（qKey 归一化比较）。 */
@@ -2371,7 +2371,7 @@
     if (watchBtn) {
       const ds = watchBtn.dataset;
       watchAdd({ q: ds.q, platform: ds.platform, sku: ds.sku, title: ds.title, price: ds.price });
-      showToast('已关注「' + ds.q + '」，下次比价拿到真实价格时，若降价会提醒你');
+      showToast('已记下「' + ds.q + '」，下次查同一件、且服务端返回真实价格时，会比记下的价更低才提示');
       return;
     }
 
@@ -2384,7 +2384,7 @@
 
     /* 关注清单同步码：导出即复制；导入展开文本域，点「导入」才真正写入 */
     if (e.target.closest('[data-watch-export]')) {
-      if (!watchList().length) { showToast('还没有关注任何商品'); return; }
+      if (!watchList().length) { showToast('还没有记下任何商品'); return; }
       copyText(encodeWatchCode(watchList()));
       return;
     }
@@ -2400,8 +2400,8 @@
       const box = $('#watch-import-box');
       const n = box ? watchImport(box.value) : -1;
       if (n < 0) showToast('同步码无效，检查是否完整复制');
-      else if (n === 0) showToast('同步码里没有有效的关注记录');
-      else showToast('已导入 ' + n + ' 条关注');
+      else if (n === 0) showToast('同步码里没有有效的记录');
+      else showToast('已导入 ' + n + ' 条记录');
       renderDrawer();
       return;
     }
@@ -2506,7 +2506,7 @@
          "没连上"要去起服务端，"0 密钥"要去配 key，处理动作正好相反。 */
       if (SERVER_OK === false || (SERVER_OK === true && HEALTH_CONFIGURED_COUNT === 0)) {
         loading.remove();
-        const card = appendAI(renderBasketOffline(items, SERVER_OK === true ? 'nokey' : 'offline'));
+        const card = appendCard(renderBasketOffline(items, SERVER_OK === true ? 'nokey' : 'offline'));
         mountManualBasket(card);
         return;
       }
@@ -2522,10 +2522,10 @@
       SERVER_OK = true;
 
       loading.remove();
-      appendAI(renderBasket(data));
+      appendCard(renderBasket(data));
     } catch (e) {
       loading.remove();
-      appendAI(renderError('清单没算出来', String((e && e.message) || e), '重新算一次'), null, true);
+      appendCard(renderError('清单没算出来', String((e && e.message) || e), '重新算一次'), null, true);
     } finally {
       if (go) go.disabled = false;
     }
@@ -2535,12 +2535,12 @@
     const items = basketQueryList();
 
     if (!items.length) {
-      appendAI(renderError('清单是空的', '一行写一件商品，我就逐件比价，再算该分几家买。'));
+      appendCard(renderError('清单是空的', '一行写一件商品，我就逐件比价，再算该分几家买。'));
       return;
     }
     if (items.length > BASKET_MAX) {
       // 超限时把话说清楚，而不是悄悄只算前 8 件 —— 用户会以为剩下那些也算过了
-      appendAI(renderError('一次最多 ' + BASKET_MAX + ' 件',
+      appendCard(renderError('一次最多 ' + BASKET_MAX + ' 件',
         '你写了 ' + items.length + ' 件。每件都要打一轮平台接口，一次问太多既慢又容易被平台限流。先算最想买的那几件。'));
       return;
     }
@@ -2675,24 +2675,24 @@
         ? '服务端<strong>响应慢</strong>，正在重试。慢不等于没有——这期间比价仍会尝试走服务端，拿到结果就用真实价格。'
         : '';
 
-    /* 降价关注的管理入口放这里而不是顶栏：它和接入状态一样，是低频动作 */
+    /* 记下的商品的管理入口放这里而不是顶栏：它和接入状态一样，是低频动作 */
     const wl = watchList();
     const watchBlock = wl.length ? `
-      <div class="mini-title" style="margin-top:16px">降价关注（${wl.length}/10）</div>
+      <div class="mini-title" style="margin-top:16px">记下的商品（${wl.length}/10）</div>
       ${wl.map((w) => `
         <div class="plat-row watch-row">
           <div class="row-main">
             <div class="row-name">${esc(w.q)}</div>
-            <div class="row-desc">${esc(platLabel(w.platform))} · 关注时最低 ¥${fmtPrice(w.price)}</div>
+            <div class="row-desc">${esc(platLabel(w.platform))} · 记下时 ¥${fmtPrice(w.price)}</div>
           </div>
           <div class="row-right">
             <button class="ghost-btn" type="button"
               data-watch-remove="1" data-q="${esc(w.qKey)}" data-platform="${esc(w.platform)}">删除</button>
           </div>
         </div>`).join('')}
-      <div class="fine" style="margin:8px 0 0">下次比价且服务端返回真实价格时，若降价会在结果卡顶部提醒你。提醒一次后记录更新为当前价，再降再提；拿不到真实价格就不会提醒。</div>` : '';
+      <div class="fine" style="margin:8px 0 0">下次查同一件、且服务端返回真实价格时，才会和记下的价比一次；更低才在结果卡顶部提示一次。拿不到真实价格就不比、不提示。</div>` : '';
 
-    /* 换设备迁移：导出/导入同步码。没有关注时只给导入，别给一个复制空列表的按钮。 */
+    /* 换设备迁移：导出/导入同步码。没有记下时只给导入，别给一个复制空列表的按钮。 */
     const syncBlock = `
       <div class="watch-sync" style="display:flex;gap:8px;margin-top:10px">
         ${wl.length ? '<button class="ghost-btn" type="button" data-watch-export="1">导出同步码</button>' : ''}
@@ -2784,8 +2784,8 @@
   }
 
   /* 接入源的名字不等于购物平台的名字：dataoke 是「大淘客」这个 API 服务商，
-     用户认的是淘宝 / 天猫。降价关注里显示"大淘客开放平台"等于让他看不懂
-     自己关注了哪个平台。所以先把接入源 id 翻译成人话，再退回原来的查表。 */
+     用户认的是淘宝 / 天猫。记下的商品里显示"大淘客开放平台"等于让他看不懂
+     自己记了哪个平台。所以先把接入源 id 翻译成人话，再退回原来的查表。 */
   const PLAT_LABEL = { dataoke: '淘宝 / 天猫' };
 
   function platLabel(id) {
@@ -2819,7 +2819,7 @@
     if (e.target.id !== 'demo-toggle') return;
     DEMO_MODE = e.target.checked;
     closeDrawer();
-    appendAI(DEMO_MODE
+    appendCard(DEMO_MODE
       ? `<p class="lead">效果预览已打开。</p>
          <p class="sub">现在随便问一件商品，价格会被拉进一张表横着比。再强调一次：<strong>那串数字是样例，不是报价。</strong>
          真实价格要等联盟密钥配好。</p>`
@@ -2954,7 +2954,7 @@
   }
 
   /* ?demo=1 直接进演示模式，?q= 指定商品 —— 两种模式都认。
-     这是分享深链的另一半：比价卡上的「分享链接」生成的就是这样的 URL，
+     这是分享深链的另一半：比价卡上「复制链接」生成的就是这样的 URL，
      对方打开即自动比价。演示链接会标明「演示数据 · 非实时」，真实链接就是真比价。 */
   try {
     const sp = new URLSearchParams(location.search);

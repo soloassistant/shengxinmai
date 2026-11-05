@@ -103,7 +103,7 @@
     return `<div class="mb-total"><span>合计 ${res.pricedCount} 件（清单共 ${res.itemCount} 件）</span><b>${money(res.total)}</b></div>` +
       (missing > 0 ? `<div class="mb-warn">还有 ${missing} 件没填价，下面的总价只含已填的 ${res.pricedCount} 件。</div>` : '') +
       `<div class="mb-groups">${lines}</div>${mergeLine}` +
-      '<div class="mb-foot">按你填的「到手价」相加，不含运费；合并方案为估算，商品价可能变化。</div>';
+      '<div class="mb-foot">按你填的「到手价」相加，不含运费、满减与优惠券；合并方案为估算，商品价可能变化。</div>';
   }
 
   return { compute, summaryHtml, itemBestText, money, round2 };
