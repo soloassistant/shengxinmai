@@ -737,6 +737,30 @@ p{ margin:0; }
 }
 .bi-links .go{ margin-top:0; }
 
+/* ---------- 手填到手价清单（无服务端也能算总账） ---------- */
+.mb{ margin-top:16px; padding-top:14px; border-top:1px dashed var(--line); }
+.mb-title{ font-size:13.5px; font-weight:600; }
+.mb-note{ font-size:12px; color:var(--ink-2); margin:4px 0 10px; line-height:1.6; }
+.mb-item{ border:1px solid var(--line); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:8px; background:var(--surface); }
+.mb-head{ display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.mb-best{ font-size:13px; font-weight:700; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.mb-offers{ display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+.mb-offer{ display:flex; gap:8px; }
+.mb-pf{ flex:0 0 96px; height:44px; padding:0 8px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); font-size:13px; }
+.mb-price{ flex:1; min-width:0; height:44px; padding:0 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); font-size:14px; }
+.mb-btns{ display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+.mb-add,.mb-del{ min-height:44px; padding:0 12px; border-radius:10px; font-size:12.5px; background:transparent; border:1px dashed var(--line); color:var(--ink-2); }
+.mb-del{ border-style:solid; background:var(--surface-2); }
+.mb-summary{ margin-top:12px; padding:12px; border-radius:var(--radius-sm); background:var(--surface-2); }
+.mb-total{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; font-size:15px; font-weight:700; }
+.mb-empty{ font-size:12.5px; color:var(--ink-2); line-height:1.6; }
+.mb-warn{ margin-top:8px; font-size:12px; color:var(--brand-ink); line-height:1.55; }
+.mb-groups{ margin-top:6px; }
+.mb-line{ display:flex; justify-content:space-between; gap:10px; padding-top:6px; font-size:12.5px; color:var(--ink-2); }
+.mb-line b{ color:var(--ink); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.mb-merge{ border-top:1px dashed var(--line); margin-top:8px; padding-top:8px; }
+.mb-foot{ margin-top:8px; font-size:12px; color:var(--ink-2); line-height:1.55; }
+
 /* ---------- 无障碍与动效偏好 ---------- */
 .sr-only{
   position:absolute; width:1px; height:1px; padding:0; margin:-1px;

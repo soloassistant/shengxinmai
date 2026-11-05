@@ -23,12 +23,13 @@
 /* 缓存名要跟着**预缓存清单**走：SHELL 里加了文件就得升版本号，
    否则已经装过 App 的用户不会重新跑 install，新图标永远进不了缓存
    （在线时看不出来 —— 网络优先照样能取到；一断网才暴露）。 */
-const VERSION = 'sxm-shell-v3';
+const VERSION = 'sxm-shell-v4';
 const SHELL = [
   './',
   './index.html',
   './styles.css',
   './data.js',
+  './manual-basket.js',
   './app.js',
   './icon.svg',
   './icon-192.png',
