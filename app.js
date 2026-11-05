@@ -2593,6 +2593,10 @@
      ====================================================================== */
   const drawer = $('#drawer');
   const mask   = $('#drawer-mask');
+  /* 隐私说明：第三个「抽屉」。和另外两个共用同一套 inert / 焦点回收逻辑，
+     免得它成为又一个"盖住了页面但底层还能 Tab 进去"的洞。 */
+  const legalEl   = $('#legal');
+  const legalMask = $('#legal-mask');
 
   /* ---------- 抽屉的无障碍：inert + 焦点管理 ----------
      为什么必须有：两个抽屉只是**视觉上**盖住了页面（靠 .open 加遮罩），
@@ -2608,13 +2612,15 @@
   function syncInert() {
     const dOpen = !!(drawer && drawer.classList.contains('open'));
     const bOpen = !!(basketEl && basketEl.classList.contains('open'));
-    if (appRoot) appRoot.inert = dOpen || bOpen;
+    const lOpen = !!(legalEl && legalEl.classList.contains('open'));
+    if (appRoot) appRoot.inert = dOpen || bOpen || lOpen;
     /* 抽屉之间也要互锁，而且**关着的时候就得锁**：
        .drawer 关着只是 translateX(102%) 移出屏幕外，元素还在无障碍树里、
        还能 Tab 到（里面就有「关闭」按钮和输入框）—— 键盘用户会 Tab 进
        一个自己看不见的面板。原来只锁了 .app，抽屉之间和关闭状态全漏了。 */
     if (drawer) drawer.inert = !dOpen;
     if (basketEl) basketEl.inert = !bOpen;
+    if (legalEl) legalEl.inert = !lOpen;
   }
 
   /** 打开抽屉的统一处理：记住来源焦点 → 锁住主内容 → 把焦点移进抽屉 */
@@ -2840,8 +2846,27 @@
   if ($('#btn-status')) $('#btn-status').addEventListener('click', openDrawer);
   if ($('#btn-close')) $('#btn-close').addEventListener('click', closeDrawer);
   mask.addEventListener('click', closeDrawer);
+
+  /* 隐私说明与免责：页内打开，不跳外链（外链在弱网和 App 内置浏览器里经常打不开，
+     等于把合规入口做成了一条死路）。 */
+  function openLegal() {
+    if (!legalEl) return;
+    legalEl.classList.add('open');
+    if (legalMask) legalMask.classList.add('open');
+    focusInto(legalEl);
+  }
+  function closeLegal() {
+    if (!legalEl) return;
+    legalEl.classList.remove('open');
+    if (legalMask) legalMask.classList.remove('open');
+    restoreFocus();
+  }
+  if ($('#btn-legal')) $('#btn-legal').addEventListener('click', openLegal);
+  if ($('#legal-close')) $('#legal-close').addEventListener('click', closeLegal);
+  if (legalMask) legalMask.addEventListener('click', closeLegal);
+
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closeDrawer(); closeBasket(); }
+    if (e.key === 'Escape') { closeDrawer(); closeBasket(); closeLegal(); }
   });
 
   drawer.addEventListener('change', (e) => {

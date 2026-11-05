@@ -191,7 +191,9 @@
       </button>
       <button class="send" type="submit" aria-label="发送" disabled>↑</button>
     </form>
-    <p class="legal">仅供比价与跳转，不代下单、不代支付</p>
+    <p class="legal">仅供比价与跳转，不代下单、不代支付 ·
+      <button class="legal-link" id="btn-legal" type="button" aria-haspopup="dialog">隐私说明与免责</button>
+    </p>
   </footer>
 
 </div>
@@ -234,6 +236,45 @@
     <p>清单只算<strong>到手价之和</strong>，不含运费：接上服务端时用各平台最低到手价，手动填写时用你填的价。合并下单时运费可能把差价再拉平一次，<strong>下单页要自己看一眼运费</strong>。</p>
   </div>
 </aside>
+
+<!-- ============ 隐私说明与免责（页内，不跳外链） ============ -->
+<div class="sheet-mask" id="legal-mask"></div>
+<section class="sheet" id="legal" role="dialog" aria-modal="true" aria-label="隐私说明与免责">
+  <div class="sheet-head">
+    <h3>隐私说明与免责</h3>
+    <button class="ghost-btn" id="legal-close" type="button">关闭</button>
+  </div>
+  <div class="sheet-body legal-body">
+    <h4>本地存了什么</h4>
+    <p>下面这些只存在你自己的浏览器里，不上传、不同步：</p>
+    <ul>
+      <li><b>sxm.theme</b>：主题偏好（自动 / 浅色 / 深色）</li>
+      <li><b>sxm.recent</b>：最近查过的 8 条原话，点一下可重查</li>
+      <li><b>sxm.watch</b>：你自己「记下」的商品与当时的价格</li>
+      <li><b>sxm.manualBasket.v1</b>：你手填的平台与到手价</li>
+      <li><b>sxm.lastFrom</b>：上次用的出发城市，用来少问一句</li>
+    </ul>
+    <p>没有账号、没有 token、没有支付信息；联盟接口密钥只在服务端。浏览器「清除站点数据」即可全部删掉。</p>
+
+    <h4>什么时候会把内容发出去</h4>
+    <ul>
+      <li>比价：商品名发给本站服务端，由服务端向联盟接口查询。</li>
+      <li>省钱清单：清单里的商品名发给 <b>/api/basket</b> 逐件询价。</li>
+      <li>机票 / 火车票：出发地、目的地、日期发给 <b>/api/flights</b>。</li>
+      <li>纯前端模式（没有服务端）下这些请求都不会发出，只给你平台搜索入口。</li>
+    </ul>
+    <p>本站没有埋点、没有第三方统计，也不会上报错误详情。服务端若自行记录请求日志，以部署方的说明为准。</p>
+
+    <h4>价格与优惠从哪来</h4>
+    <p>价格来自各平台<strong>官方联盟接口</strong>或平台页面，是<strong>查询那一刻</strong>的报价，会随库存、券和活动变动。到手价以平台结算页为准；本页展示的价格不含运费，省钱清单只把<strong>到手价</strong>相加，<strong>不含运费、满减与优惠券</strong>；「合并到几家买」是估算，商品价可能变化。下单页的最终金额请自己核对。</p>
+
+    <h4>免责与使用条款（简版）</h4>
+    <p>本站<strong>不代下单、不代支付、不接触你的平台账号</strong>，只做信息整理与跳转。跳转后是第三方页面，适用该平台自己的用户协议与隐私政策。因平台改价、限流、接口调整造成的差异，本站不承担赔偿责任；发现价格明显异常时，请以平台页面为准。</p>
+  </div>
+  <div class="sheet-foot">
+    <p>这份说明对应当前版本的本地存储键与请求路径；功能变化时会同步更新。</p>
+  </div>
+</section>
 
 <script src="data.js"></script>
 <script src="manual-basket.js"></script>
