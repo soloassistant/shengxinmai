@@ -2625,10 +2625,10 @@
                text: '当前版本未实现，配了 key 也不会生效' };
     }
     if (impl === true) {
-      return { tag: '未接入', ico: '—', icoBg: '#98A2B3', tagCls: 'tag-mute',
+      return { tag: '未接入', ico: '—', icoBg: '#5F6773', tagCls: 'tag-mute',
                text: '还没配密钥，配上就能用' };
     }
-    return { tag: '未接入', ico: '?', icoBg: '#98A2B3', tagCls: 'tag-mute',
+    return { tag: '未接入', ico: '?', icoBg: '#5F6773', tagCls: 'tag-mute',
              text: '需服务端才能接入（当前是纯前端模式）' };
   }
 
