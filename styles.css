@@ -510,6 +510,45 @@ p{ margin:0; }
 }
 
 .legal{ text-align:center; font-size:12px; color:var(--ink-3); margin-top:7px; }
+/* 合规入口做成 44×44 的真按钮，而不是一行小字：
+   手机上 12px 的链接热区只有 20px 高，手指点不准，等于没有入口。
+   上下 -12px 的负 margin 把视觉高度还回去，footer 不会因此长高一截。 */
+.legal-link{
+  display:inline-flex; align-items:center; justify-content:center;
+  min-height:44px; min-width:44px; margin:-12px 0; padding:0 6px;
+  font:inherit; color:var(--ink-2); text-decoration:underline; text-underline-offset:2px;
+}
+.legal-link:active{ transform:scale(.98); }
+.legal-body h4{ margin:6px 0 0; font-size:13px; font-weight:700; color:var(--ink); }
+.legal-body ul{ margin:0; padding-left:18px; }
+.legal-body li{ font-size:12.5px; color:var(--ink-2); line-height:1.7; }
+.legal-body p{ font-size:12.5px; color:var(--ink-2); line-height:1.7; }
+
+/* ---------- 底部说明面板（隐私/免责用；不是抽屉，别混进 .drawer 的口径） ---------- */
+.sheet-mask{
+  position:fixed; inset:0; background:rgba(16,24,40,.38);
+  opacity:0; pointer-events:none; transition:opacity .22s; z-index:40;
+}
+.sheet-mask.open{ opacity:1; pointer-events:auto; }
+.sheet{
+  position:fixed; left:50%; bottom:0; z-index:50;
+  width:min(560px,100%); max-height:82vh; display:flex; flex-direction:column;
+  background:var(--surface); border-radius:16px 16px 0 0;
+  padding-bottom:env(safe-area-inset-bottom,0);
+  transform:translate(-50%,102%); transition:transform .26s cubic-bezier(.32,.72,0,1);
+}
+.sheet.open{ transform:translate(-50%,0); box-shadow:0 -8px 32px rgba(16,24,40,.18); }
+.sheet-head{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 16px; border-bottom:1px solid var(--line-soft);
+}
+.sheet-head h3{ margin:0; font-size:15px; font-weight:700; }
+.sheet-body{ flex:1; overflow:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+.sheet-foot{
+  padding:12px 16px calc(12px + env(safe-area-inset-bottom,0));
+  border-top:1px solid var(--line-soft); background:var(--surface-2);
+  font-size:12px; color:var(--ink-3); line-height:1.7;
+}
 
 /* ---------- 抽屉 ---------- */
 .drawer-mask{
