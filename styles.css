@@ -13,6 +13,7 @@
   --ink-2:         #4A525F;
   --ink-3:         #666E7B;
   --brand:         #FF5A36;
+  --brand-deep:    #C2410C; /* 承载白字的最小加深色：5.18:1 */
   --brand-soft:    #FFF1ED;
   --brand-ink:     #C7371A;
   --food:          #F59E0B;
@@ -108,11 +109,11 @@ p{ margin:0; }
 .bubble-user{
   max-width:82%;
   width:auto;
-  background:var(--brand);
+  background:var(--brand-deep);
   color:#fff;
   padding:10px 14px;
   border-radius:16px 16px 4px 16px;
-  box-shadow:0 2px 6px rgba(255,90,54,.22);
+  box-shadow:0 2px 6px rgba(194,65,12,.22);
   font-size:14.5px;
   word-break:break-word;
 }
@@ -260,19 +261,19 @@ p{ margin:0; }
   letter-spacing:-.3px;
 }
 .pf-jd{ background:#E1251B; }
-.pf-tb{ background:#FF5000; }
+.pf-tb{ background:#FF5000; color:#14181F; }
 .pf-pdd{ background:#E02E24; }
 .pf-vip{ background:#E6004C; }
-.pf-sn{ background:#F7B500; }
+.pf-sn{ background:#F7B500; color:#14181F; }
 .pf-dy{ background:#161823; }
-.pf-dw{ background:#00C2B3; }
-.pf-xhs{ background:#FF2442; }
+.pf-dw{ background:#00C2B3; color:#14181F; }
+.pf-xhs{ background:#FF2442; color:#14181F; }
 .pf-mt{ background:#FFC300; color:#3D2B00; }
-.pf-ele{ background:#0A9EF6; }
-.pf-ctrip{ background:#2577E3; }
-.pf-fliggy{ background:#FF6A00; }
-.pf-qunar{ background:#00A9E0; }
-.pf-tongcheng{ background:#FF7700; }
+.pf-ele{ background:#0A9EF6; color:#14181F; }
+.pf-ctrip{ background:#1D63C9; }
+.pf-fliggy{ background:#FF6A00; color:#14181F; }
+.pf-qunar{ background:#00A9E0; color:#14181F; }
+.pf-tongcheng{ background:#FF7700; color:#14181F; }
 .pf-12306{ background:#0F5AA8; }
 
 .row-main{ min-width:0; }
@@ -299,7 +300,7 @@ p{ margin:0; }
   font-size:12.5px; font-weight:600;
   text-decoration:none;
 }
-.go-brand{ background:var(--brand); }
+.go-brand{ background:var(--brand-deep); }
 .go:active{ transform:scale(.96); }
 
 /* ---------- 数据来源提示条 ---------- */
@@ -330,7 +331,7 @@ p{ margin:0; }
 }
 .trip-line span{
   position:absolute; left:50%; top:-3px; transform:translateX(-50%);
-  background:#EAF2FF; padding:0 7px; font-size:12px; color:#3A6FD8; font-weight:600;
+  background:#EAF2FF; padding:0 7px; font-size:12px; color:#2B5BBF; font-weight:600;
   white-space:nowrap;
 }
 .trip-meta{ display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--ink-2); }
@@ -438,6 +439,7 @@ p{ margin:0; }
 /* ---------- 设置开关行 ---------- */
 .switch-row{
   display:flex; align-items:center; gap:10px;
+  min-height:44px;
   padding:12px; border-radius:var(--radius-sm);
   background:var(--surface-2); border:1px solid var(--line);
   font-size:13px; cursor:pointer; user-select:none;
@@ -479,7 +481,7 @@ p{ margin:0; }
   transition:border-color .15s, box-shadow .15s;
 }
 #input::placeholder{ color:var(--ink-3); }
-#input:focus{ border-color:#FFC6B6; box-shadow:0 0 0 3px rgba(255,90,54,.1); }
+#input:focus{ border-color:var(--brand-deep); box-shadow:0 0 0 3px rgba(194,65,12,.28); }
 .send{
   flex:0 0 auto; width:44px; height:44px; border-radius:50%;
   background:var(--brand); color:#fff; font-size:19px; font-weight:700;
@@ -625,7 +627,7 @@ p{ margin:0; }
 
 /* .go 默认是「深底白字」。暗色下 --ink 变成近白，不压的话会变成白底白字——纯瞎。 */
 :root[data-theme="dark"] .go{ background:#E9EDF2; color:#12161C; }
-:root[data-theme="dark"] .go-brand{ background:var(--brand); color:#fff; }
+:root[data-theme="dark"] .go-brand{ background:var(--brand-deep); color:#fff; }
 /* 平台品牌色在深色底上过亮，稍微压一点，别让六个彩色块抢走注意力 */
 :root[data-theme="dark"] .pf{ filter:saturate(.86) brightness(.94); }
 
