@@ -551,6 +551,20 @@ p{ margin:0; }
   border-top:1px solid var(--line-soft); background:var(--surface-2);
   font-size:12px; color:var(--ink-3); line-height:1.7;
 }
+/* 危险操作确认：取消与确认同宽，两个都是 44px 高；
+   确认键用深红而不是品牌橙 —— 这是"会丢数据"的动作，不该长得像普通提交。 */
+.confirm-body p{ font-size:13px; color:var(--ink-2); line-height:1.7; }
+.confirm-actions{
+  display:flex; gap:10px;
+  padding:12px 16px calc(12px + env(safe-area-inset-bottom,0));
+  border-top:1px solid var(--line-soft);
+}
+.confirm-actions .ghost-btn{ flex:1; justify-content:center; }
+.danger-btn{
+  flex:1; min-height:44px; border-radius:999px;
+  background:#B3261E; color:#fff; font-size:13px; font-weight:600;
+}
+.danger-btn:active{ transform:scale(.98); }
 
 /* ---------- 抽屉 ---------- */
 .drawer-mask{
