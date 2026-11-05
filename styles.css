@@ -751,7 +751,11 @@ p{ margin:0; }
 .mb-offers{ display:flex; flex-direction:column; gap:6px; margin-top:8px; }
 .mb-offer{ display:flex; gap:8px; }
 .mb-pf{ flex:0 0 96px; height:44px; padding:0 8px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); font-size:13px; }
-.mb-price{ flex:1; min-width:0; height:44px; padding:0 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); font-size:14px; }
+.mb-price-wrap{ flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.mb-price{ width:100%; min-width:0; height:44px; padding:0 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); font-size:14px; }
+.mb-price[aria-invalid="true"]{ border-color:var(--brand-ink); }
+.mb-err{ font-size:12px; line-height:1.4; color:var(--brand-ink); }
+.mb-err:empty{ display:none; }
 .mb-btns{ display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
 .mb-add,.mb-del{ min-height:44px; padding:0 12px; border-radius:10px; font-size:12.5px; background:transparent; border:1px dashed var(--line); color:var(--ink-2); }
 .mb-del{ border-style:solid; background:var(--surface-2); }
