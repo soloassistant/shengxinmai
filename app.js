@@ -600,7 +600,8 @@
         <span>比价别只看标价。<strong>到手价 = 标价 − 平台券 − 店铺券 − 支付立减</strong>，
         同一件东西在两家店的差距通常就藏在这四项里。商品页和结算页都看一眼，才算真比过。</span>
       </div>
-      <div class="card-actions">
+      <div class="card-actions" style="gap:8px">
+        ${warnNote ? `<button class="retry" type="button" data-retry="1" style="margin-top:0">重试实时比价</button>` : ''}
         <button class="copy-btn" type="button" data-share="${esc(intent.product)}">复制链接</button>
       </div>`;
   }
@@ -995,7 +996,10 @@
       <div class="banner banner-warn"><span class="banner-ico">!</span>
         <span>${note}</span></div>
       <div class="rows">${rows}</div>
-      ${renderManualBasket(queries)}`;
+      ${renderManualBasket(queries)}
+      <div class="card-actions">
+        <button class="retry" type="button" data-retry="1" style="margin-top:0">重试实时比价</button>
+      </div>`;
   }
 
   /* ---- 手填到手价：没有服务端也能算总账的退路 -------------------------
@@ -1567,12 +1571,17 @@
       /* 服务端本来是通的、这次却问不通 —— 必须把这件事说出来。
          静默退回手动比价，用户会以为"这功能本来就这样"，
          而实际上是我们这边坏了。宁可难看，也不要让用户以为成功。 */
-      const warn = (SERVER_OK === true && lastLiveError)
-        ? '刚才没问通服务端，已退回手动比价。原因：' + lastLiveError
-          + '。可以稍后再试一次，或点右上角看「接入状态」。'
-        : '';
+      /* 两种"拿不到实时价"都必须说出来，而且都要能再试一次：
+         - 服务端本来是通的、这次没问通 → 是我们这边坏了；
+         - 一直没连上服务端 → 用户至少要知道为什么卡上没有真实价格。 */
+      const warn = SERVER_OK === true
+        ? ('刚才没问通服务端，已退回手动比价。原因：' + (lastLiveError || '未知错误')
+           + '。可以稍后再试一次，或点右上角看「接入状态」。')
+        : (SERVER_OK === false
+            ? '没连上服务端（/api/health 没有返回），跨平台实时价暂时拿不到。下面这 6 个入口是能用的，点「重试实时比价」可以再试一次。'
+            : '');
 
-      appendCard(renderShop(intent, warn));
+      appendCard(renderShop(intent, warn), warn ? text : null);
       return;
     }
     appendCard(intent.type === 'food' ? renderFood(intent) : renderRoute(intent));
@@ -1600,7 +1609,7 @@
         await handle(text);
       } catch (e) {
         // 带上 retryFor，用户点「重试」就是原样再问一次，不用重新打字
-        appendCard(renderError('这一步没走通', String((e && e.message) || e)), text);
+        appendCard(renderError('这一步没走通', String((e && e.message) || e), '重试这一步'), text);
       } finally {
         loading.remove();
         // 输入框在提交时已清空，按「有没有字」恢复发送键状态，而不是无条件点亮
@@ -2467,8 +2476,15 @@
     const el = $('#basket-count');
     if (!el) return;
     const n = basketQueryList().length;
-    el.textContent = n + ' 件' + (n > BASKET_MAX ? '（最多 ' + BASKET_MAX + ' 件）' : '');
-    el.style.color = n > BASKET_MAX ? 'var(--brand-ink)' : '';
+    /* 0 件时把按钮禁掉：原来能点，点了却把错误卡塞在抽屉背后的对话流里，
+       用户看到的是「按了没反应」。提示直接写在这行计数上，不用再点一次才知道。 */
+    el.textContent = n
+      ? (n + ' 件' + (n > BASKET_MAX ? '（最多 ' + BASKET_MAX + ' 件）' : ''))
+      : '0 件 · 先写一件商品';
+    const over = n > BASKET_MAX;
+    el.style.color = n === 0 || over ? 'var(--brand-ink)' : '';
+    const go = $('#basket-go');
+    if (go) go.disabled = n === 0 || over;
   }
 
   function openPanel(name) {
@@ -2506,7 +2522,7 @@
          "没连上"要去起服务端，"0 密钥"要去配 key，处理动作正好相反。 */
       if (SERVER_OK === false || (SERVER_OK === true && HEALTH_CONFIGURED_COUNT === 0)) {
         loading.remove();
-        const card = appendCard(renderBasketOffline(items, SERVER_OK === true ? 'nokey' : 'offline'));
+        const card = appendCard(renderBasketOffline(items, SERVER_OK === true ? 'nokey' : 'offline'), null, true);
         mountManualBasket(card);
         return;
       }
