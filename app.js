@@ -994,7 +994,114 @@
       </div>
       <div class="banner banner-warn"><span class="banner-ico">!</span>
         <span>${note}</span></div>
-      <div class="rows">${rows}</div>`;
+      <div class="rows">${rows}</div>
+      ${renderManualBasket(queries)}`;
+  }
+
+  /* ---- 手填到手价：没有服务端也能算总账的退路 -------------------------
+     用户把自己在平台结算页看到的到手价填进来；我们只做加法与分组，
+     不猜价、不编价。价格存本地，同一份清单下次打开还能接着算。 */
+  const MB_KEY = 'sxm.manualBasket.v1';
+
+  function mbLoad() {
+    try {
+      const raw = localStorage.getItem(MB_KEY);
+      const o = raw ? JSON.parse(raw) : null;
+      return o && typeof o === 'object' ? o : {};
+    } catch { return {}; }
+  }
+
+  function mbSave(items) {
+    try {
+      const out = {};
+      items.forEach((it) => {
+        const offers = (it.offers || [])
+          .filter((o) => String(o.price == null ? '' : o.price).trim() !== '');
+        if (offers.length) {
+          out[it.q] = offers.map((o) => ({ platform: o.platform, price: o.price }));
+        }
+      });
+      localStorage.setItem(MB_KEY, JSON.stringify(out));
+    } catch { /* 隐私模式/配额满：不能挡住算账 */ }
+  }
+
+  function mbOfferRow(q, offer) {
+    return `<div class="mb-offer">
+      <select class="mb-pf" aria-label="${esc(q)} 的平台">${SHOP_PLATFORMS.map((p) =>
+        `<option value="${p.id}"${p.id === offer.platform ? ' selected' : ''}>${esc(p.name)}</option>`
+      ).join('')}</select>
+      <input class="mb-price" type="number" inputmode="decimal" min="0" step="0.01"
+        value="${offer.price == null ? '' : esc(offer.price)}" placeholder="到手价"
+        aria-label="${esc(q)} 的到手价">
+    </div>`;
+  }
+
+  function renderManualBasket(queries) {
+    const saved = mbLoad();
+    const rows = queries.map((q) => {
+      const offers = (saved[q] && saved[q].length)
+        ? saved[q]
+        : [{ platform: SHOP_PLATFORMS[0].id, price: '' }];
+      return `<div class="mb-item" data-q="${esc(q)}">
+        <div class="mb-head"><span class="bi-q">${esc(q)}</span>
+          <span class="mb-best" data-mb-best>—</span></div>
+        <div class="mb-offers">${offers.map((o) => mbOfferRow(q, o)).join('')}</div>
+        <div class="mb-btns">
+          <button class="mb-add" type="button" data-mb-add>＋ 另一家价</button>
+          <button class="mb-del" type="button" data-mb-del>删除这件</button>
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<div class="mb">
+      <div class="mb-title">手填到手价，才算得出总账</div>
+      <div class="mb-note">填你在平台结算页看到的到手价（标价 − 平台券 − 店铺券 − 支付立减）。
+        我只做加法和分组，不编价；不含运费。</div>
+      ${rows}
+      <div class="mb-summary">还没填价格，算不出总价。需要你填价格才有总价。</div>
+    </div>`;
+  }
+
+  function mountManualBasket(card) {
+    const nameOf = (id) => (SHOP_PLATFORMS.find((p) => p.id === id) || {}).name || id;
+    const read = () => [...card.querySelectorAll('.mb-item')].map((row) => ({
+      q: row.dataset.q,
+      offers: [...row.querySelectorAll('.mb-offer')].map((o) => ({
+        platform: o.querySelector('.mb-pf').value,
+        price: o.querySelector('.mb-price').value
+      }))
+    }));
+    const refresh = () => {
+      const items = read();
+      const res = SXMManual.compute(items);
+      card.querySelector('.mb-summary').innerHTML = SXMManual.summaryHtml(res, nameOf);
+      [...card.querySelectorAll('.mb-item')].forEach((row, i) => {
+        row.querySelector('[data-mb-best]').innerHTML =
+          SXMManual.itemBestText(res.items[i] && res.items[i].best, nameOf);
+      });
+      mbSave(items);
+    };
+
+    card.addEventListener('input', refresh);
+    card.addEventListener('change', refresh);
+    card.addEventListener('click', (e) => {
+      const add = e.target.closest('[data-mb-add]');
+      const del = e.target.closest('[data-mb-del]');
+      if (add) {
+        const row = add.closest('.mb-item');
+        const used = new Set([...row.querySelectorAll('.mb-pf')].map((s) => s.value));
+        const next = SHOP_PLATFORMS.find((p) => !used.has(p.id));
+        if (next) {
+          row.querySelector('.mb-offers')
+            .insertAdjacentHTML('beforeend', mbOfferRow(row.dataset.q, { platform: next.id, price: '' }));
+          refresh();
+        }
+      } else if (del) {
+        del.closest('.mb-item').remove();
+        refresh();
+      }
+    });
+    refresh();
   }
 
   /* ======================================================================
@@ -2399,7 +2506,8 @@
          "没连上"要去起服务端，"0 密钥"要去配 key，处理动作正好相反。 */
       if (SERVER_OK === false || (SERVER_OK === true && HEALTH_CONFIGURED_COUNT === 0)) {
         loading.remove();
-        appendAI(renderBasketOffline(items, SERVER_OK === true ? 'nokey' : 'offline'));
+        const card = appendAI(renderBasketOffline(items, SERVER_OK === true ? 'nokey' : 'offline'));
+        mountManualBasket(card);
         return;
       }
 
