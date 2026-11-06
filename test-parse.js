@@ -1489,6 +1489,19 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   ]));
   chk(goodCard.indexOf('href="https://item.jd.com/100012043978.html"') !== -1,
     '合法 https 链接照常渲染「打开」入口（正面路径，防止"一律不渲染"蒙混过关）');
+  chk(goodCard.includes('aria-label="打开商品页"'),
+    '结果行的「打开」带 aria-label=打开商品页（读屏听到的是动作，不是一个孤零零的"打开"）');
+
+  /* ---------- U-10：同一个「打开」字，必须是两个不同的动作 ----------
+     结果行点开的是商品页；分享识别卡点开的是这张分享的详情入口。
+     读屏用户听到「打开、打开」分不出要去哪，所以两处 label 必须不同。 */
+  const rowEntrance = SXM.renderShop({ type: 'shop', product: '耳机' });
+  chk(rowEntrance.includes('aria-label="打开商品页"'),
+    '电商入口行同样标了「打开商品页」');
+  chk(shareCard.includes('aria-label="展开分享详情"'),
+    '分享卡标的是「展开分享详情」，与结果行是两个不同的动作名');
+  chk(!shareCard.includes('打开商品页'),
+    '分享卡没有混用结果行的动作名');
 
   const imgRel = SXM.renderShopLive('耳机', liveData([
     { title: 'X', final: 1, url: 'https://a.example.com/1', image: '//evil.example.com/track.png' },
