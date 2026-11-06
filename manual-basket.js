@@ -7,8 +7,15 @@
   if (root) root.SXMManual = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
-  const round2 = (n) => Math.round(n * 100) / 100;
-  const money = (n) => '¥' + Number(n).toFixed(2);
+  /* 按「分」四舍五入。Math.round(n * 100) / 100 对 1.005 会得到 1.00：
+     1.005 * 100 在二进制里是 100.4999…；先收敛到 15 位有效数字再取整。 */
+  const round2 = (n) => {
+    const v = Number(n);
+    if (!isFinite(v)) return v;
+    const cents = (v < 0 ? -1 : 1) * Math.round(Number((Math.abs(v) * 100).toPrecision(15)));
+    return cents / 100;
+  };
+  const money = (n) => '¥' + round2(n).toFixed(2);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 

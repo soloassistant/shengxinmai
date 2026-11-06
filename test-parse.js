@@ -2077,6 +2077,28 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   chk(metricsDrawerHtml().indexOf('undefined') === -1,
     '投影缺 platforms 时抽屉不印 undefined（有兜底，不是裸访问）');
 
+  /* 金额显示按「分」四舍五入：2.675 / 1.005 在二进制下会被 toFixed 少算一分。 */
+  const moneyCard = SXM.renderShopLive('金额', {
+    demo: false, unconfigured: [],
+    platforms: [{
+      id: 'jd', name: '京东', ok: true, count: 2,
+      lowest: { final: 1.005, sku: 'm1', title: '金额', history: null },
+      items: [
+        { title: '小数 A', final: 2.675, price: 2.675, coupon: 0, url: 'https://a.example.com/1' },
+        { title: '小数 B', final: 1.005, price: 1.005, coupon: 0, url: 'https://a.example.com/2' },
+      ],
+    }],
+  });
+  chk(/cny">¥<\/span>2\.68/.test(moneyCard) && /cny">¥<\/span>1\.01/.test(moneyCard),
+    '价格显示按分四舍五入：2.675 → ¥2.68、1.005 → ¥1.01（不是 2.67 / 1.00）');
+  const MB = require('./manual-basket.js');
+  chk(MB.parsePrice('1.005').value === 1.01,
+    '手填 1.005 按分进位为 1.01（实际 ' + MB.parsePrice('1.005').value + '）');
+  chk(MB.parsePrice('1299.995').value === 1300,
+    '手填 1299.995 按分进位为 1300（实际 ' + MB.parsePrice('1299.995').value + '）');
+  chk(MB.money(1.005) === '¥1.01',
+    '清单金额渲染同样按分进位（实际 ' + MB.money(1.005) + '）');
+
   SXM.closeDrawer();
 
   say(`\n结果：${pass} 通过 / ${fail} 失败`);
