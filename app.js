@@ -555,8 +555,8 @@
       const best = !!(d && cheapest && d.id === cheapest.id);
 
       const right = d
-        ? `<div class="price"><span class="cny">¥</span>${d.final}</div>` +
-          `<div class="price-old">${d.coupon ? '券前 ¥' + d.price : '&nbsp;'}</div>`
+        ? `<div class="price"><span class="cny">¥</span>${fmtPrice(d.final)}</div>` +
+          `<div class="price-old">${d.coupon ? '券前 ¥' + fmtPrice(d.price) : '&nbsp;'}</div>`
         : `<div class="price-na">去平台看实时价</div>`;
 
       return `
@@ -633,13 +633,16 @@
        比价的全部价值就建立在这个数字可信上 —— 拿不到就该说拿不到。 */
     const v = numOrNull(n);
     if (v === null) return '—';
-    /* 先按「分」四舍五入，再决定省不省小数点。
+    /* 先按「分」四舍五入，再统一补两位小数。
        不能直接 v.toFixed(2)：2.675 在二进制里是 2.67499…，toFixed 给出 2.67，
        比真实值少一分；而同一笔钱在清单里按分进位是 2.68，两处对不上。
        先收敛到 15 位有效数字再取整，消掉 1.005 * 100 = 100.4999… 这类误差。 */
     const cents = (v < 0 ? -1 : 1) * Math.round(Number((Math.abs(v) * 100).toPrecision(15)));
     if (!isFinite(cents)) return '—';
-    return cents % 100 === 0 ? String(cents / 100) : (cents / 100).toFixed(2);
+    /* 金额一律两位小数，和手填清单的 money() 完全一致（¥1299.00，不是 ¥1299）。
+       整元省掉小数点的写法看着"干净"，但同一笔钱在两处显示成两个样子，
+       用户会以为哪边算错了；而且 ¥1299 与 ¥1299.5 混排时小数点不对齐。 */
+    return (cents / 100).toFixed(2);
   }
 
   const money = (n) => '<span class="cny">¥</span>' + fmtPrice(n);
@@ -2287,7 +2290,7 @@
           </div>
           <div class="fl-price">
             <div class="fl-amount">${esc(f.symbol || '¥')}${
-            priceVal === null ? '—' : Math.round(priceVal)}</div>
+            priceVal === null ? '—' : fmtPrice(priceVal)}</div>
             <div class="fl-unit">起</div>
           </div>
         </div>`;
