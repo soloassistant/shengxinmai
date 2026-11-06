@@ -2275,7 +2275,7 @@
             <div class="fl-port">${esc(f.arrAirport || '')}</div>
           </div>
           <div class="fl-main">
-            <div class="fl-carrier">${esc(f.carrier || '—')}${f.flightNo ? ' ' + esc(f.flightNo) : ''}</div>
+            <div class="fl-carrier"><span class="fl-name" title="${esc(f.carrier || '—')}">${esc(f.carrier || '—')}</span>${f.flightNo ? `<span class="fl-no">${esc(f.flightNo)}</span>` : ''}</div>
             ${isBest ? '<div class="fl-tag">最便宜</div>' : ''}
           </div>
           <div class="fl-price">

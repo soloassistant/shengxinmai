@@ -219,9 +219,15 @@ p{ margin:0; }
 .fl-meta{ font-size:12px; color:var(--ink-3); white-space:nowrap; margin-top:1px; }
 .fl-main{ min-width:0; }
 .fl-carrier{
+  display:flex; gap:4px; min-width:0;
   font-size:12.5px; font-weight:600;
+}
+/* 航司全名可以截断，但航班号不能被吞掉 —— 它是用户认航班的关键信息。 */
+.fl-name{
+  min-width:0;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
+.fl-no{ flex:0 0 auto; white-space:nowrap; }
 .fl-tag{
   display:inline-block; margin-top:3px; font-size:12px; font-weight:700;
   background:#FFEDE7; color:#C2410C; border-radius:4px; padding:1px 5px;
