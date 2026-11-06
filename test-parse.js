@@ -1562,7 +1562,8 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
      stopsText 更隐蔽 —— esc(undefined) 得到字符串 "undefined"，是真值，
      .filter(Boolean) 根本挡不住，会照样拼进 meta。 */
   const noCarrier = SXM.renderFlightTable({ ok: true, count: 1, flights: [{ price: 100 }] });
-  chk(noCarrier.indexOf('fl-carrier">—') !== -1, 'carrier 缺字段时航司名显示 —，实际没显示');
+  chk(/fl-carrier"><span class="fl-name"[^>]*>—<\/span>/.test(noCarrier),
+    'carrier 缺字段时航司名显示 —，实际没显示');
   chk(noCarrier.indexOf('undefined') === -1, '整行不出现 undefined');
 
   const noStops = SXM.renderFlightTable({ ok: true, count: 1,
