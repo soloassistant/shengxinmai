@@ -39,11 +39,11 @@ jobs:
       - name: 归集要发布的静态文件
         run: |
           mkdir -p publish
-          cp index.html app.js data.js styles.css sw.js manifest.json .nojekyll publish/
+          cp index.html app.js data.js styles.css manual-basket.js sw.js manifest.json .nojekyll publish/
           cp icon.svg favicon-32.png icon-192.png icon-512.png icon-maskable-512.png publish/
           cp apple-touch-icon.png og-image.png publish/
           # 白名单漏了文件就在这儿失败，别等线上默默 404
-          for f in index.html app.js data.js styles.css sw.js manifest.json icon.svg \
+          for f in index.html app.js data.js styles.css manual-basket.js sw.js manifest.json icon.svg \
                    favicon-32.png icon-192.png icon-512.png icon-maskable-512.png \
                    apple-touch-icon.png og-image.png; do
             test -s "publish/$f" || { echo "::error::publish/$f 没归集到（白名单漏了？）"; exit 1; }
