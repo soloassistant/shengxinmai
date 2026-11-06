@@ -1817,6 +1817,12 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   chk(/\.row-img\s*\{/.test(cssSrc), '（静态结构）.row-img 在样式表里有定义（缩略图那一列）');
   chk(/\.row-img-ph\s*\{/.test(cssSrc), '（静态结构）.row-img-ph 首字占位块也有定义');
 
+  /* 渐变字是纯装饰：读屏念出来只会得到「省 省心买」「比 电商比价」，
+     旁边已有完整文字标签，所以这 5 处都该对读屏隐藏。 */
+  const decoMarks = htmlSrc.match(/<(?:div|span) class="(?:brand-mark|cap-ico(?:\s[^"]*)?)"[^>]*>/g) || [];
+  chk(decoMarks.length === 5 && decoMarks.every((t) => /aria-hidden="true"/.test(t)),
+    '（静态结构）品牌字与 4 个分类渐变字全部 aria-hidden（实际 ' + decoMarks.length + ' 个）');
+
   /* ========================================================================
      CSP（2026-10-12）：第二条防线，且必须**可证伪**地钉住
      ------------------------------------------------------------------------
