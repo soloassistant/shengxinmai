@@ -570,7 +570,7 @@
           </div>
           <div class="row-right">
             ${right}
-            <a class="go ${best ? 'go-brand' : ''}" href="${p.url.replace('{q}', q)}" target="_blank" rel="noopener noreferrer">打开</a>
+            <a class="go ${best ? 'go-brand' : ''}" href="${p.url.replace('{q}', q)}" target="_blank" rel="noopener noreferrer" aria-label="打开商品页">打开</a>
           </div>
         </div>`;
     }).join('');
@@ -779,7 +779,7 @@
               ? '<div class="price-na" style="margin-top:5px">样例</div>'
               : (goUrl
                   ? `<a class="go ${i === 0 ? 'go-brand' : ''}" href="${esc(goUrl)}"
-                       target="_blank" rel="noopener noreferrer">打开</a>`
+                       target="_blank" rel="noopener noreferrer" aria-label="打开商品页">打开</a>`
                   // 真实数据但链接没通过协议校验：照实说，别假装有入口
                   : '<div class="price-na" style="margin-top:5px">平台未给链接</div>')}
           </div>
@@ -921,7 +921,7 @@
       // 演示数据的链接是占位符，不能做成能点的假按钮；真实链接也要过协议校验
       const goUrl = safeUrl(pq.best && pq.best.url);
       const go = pq.best && goUrl
-        ? `<a class="go go-brand" href="${esc(goUrl)}" target="_blank" rel="noopener noreferrer">打开</a>`
+        ? `<a class="go go-brand" href="${esc(goUrl)}" target="_blank" rel="noopener noreferrer" aria-label="打开商品页">打开</a>`
         : '';
       return `<div class="basket-item">
         <div>
@@ -1728,7 +1728,7 @@
           <div><div class="bi-q">${platName}商品</div>
           <div class="bi-sub">商品 ID：${esc(p.id)}</div></div>
           <div class="bi-right"><a class="go go-brand" href="${esc(url)}"
-            target="_blank" rel="noopener noreferrer">打开</a></div>
+            target="_blank" rel="noopener noreferrer" aria-label="展开分享详情">打开</a></div>
         </div></div>`;
     } else if (p.kind === 'truncated') {
       title = '这条链接没复制完整';
