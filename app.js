@@ -633,7 +633,13 @@
        比价的全部价值就建立在这个数字可信上 —— 拿不到就该说拿不到。 */
     const v = numOrNull(n);
     if (v === null) return '—';
-    return Number.isInteger(v) ? String(v) : v.toFixed(2);
+    /* 先按「分」四舍五入，再决定省不省小数点。
+       不能直接 v.toFixed(2)：2.675 在二进制里是 2.67499…，toFixed 给出 2.67，
+       比真实值少一分；而同一笔钱在清单里按分进位是 2.68，两处对不上。
+       先收敛到 15 位有效数字再取整，消掉 1.005 * 100 = 100.4999… 这类误差。 */
+    const cents = (v < 0 ? -1 : 1) * Math.round(Number((Math.abs(v) * 100).toPrecision(15)));
+    if (!isFinite(cents)) return '—';
+    return cents % 100 === 0 ? String(cents / 100) : (cents / 100).toFixed(2);
   }
 
   const money = (n) => '<span class="cny">¥</span>' + fmtPrice(n);
