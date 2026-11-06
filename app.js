@@ -1779,7 +1779,14 @@
     const box = $('#recent-row');
     if (!box) return;
     const list = recentList();
-    if (!list.length) { box.hidden = true; box.innerHTML = ''; return; }
+    /* 没历史时原来整行隐藏 —— 用户第一次进来看到的是"输入框上什么都没有"，
+       既不知道这里将来会长出东西，也不知道点一下能重查。留一片空白不等于留空态：
+       空态要说明这一行是干什么的。 */
+    if (!list.length) {
+      box.hidden = false;
+      box.innerHTML = '<span class="recent-hint">查过什么会出现在这里，点一下就能再查一次</span>';
+      return;
+    }
     box.hidden = false;
     box.innerHTML = list.map((q) =>
       `<button class="chip chip-recent" type="button" data-recent="${esc(q)}" title="再查一次">${esc(q)}</button>`).join('');

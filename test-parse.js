@@ -1101,6 +1101,26 @@ for (const [okFlag, label] of webOnlyChecks) {
 
 const chk = (cond, label) => { if (cond) { pass++; say(`✓  ${label}`); } else { fail++; say(`✗  ${label}`); } };
 
+/* ---------- 最近查询：空历史不能只留一片空白 ----------
+   第一次进来时这一行什么都没有，用户既不知道它将来会出现什么，
+   也不知道点一下能重查。空态要说明"这里是干什么的"。 */
+say('\n— 最近查询空态 —');
+sandbox.localStorage.removeItem('sxm.recent');
+SXM.renderRecent();
+const recentBox = EL_BY_SEL.get('#recent-row');
+chk(recentBox.hidden === false,
+  '无历史时这一行仍然可见（不是整行消失）');
+chk(recentBox.innerHTML.includes('查过什么会出现在这里'),
+  '空态有一行引导文案，说明查过的东西会出现在这里');
+chk(!/chip-recent/.test(recentBox.innerHTML),
+  '空态不画假 chip（没有可点的东西就别给按钮形状）');
+sandbox.localStorage.setItem('sxm.recent', JSON.stringify(['耳机']));
+SXM.renderRecent();
+chk(/chip-recent/.test(recentBox.innerHTML) && !recentBox.innerHTML.includes('查过什么'),
+  '有历史时切回 chip 列表，引导文案收起');
+sandbox.localStorage.removeItem('sxm.recent');
+SXM.renderRecent();
+
 /* ==========================================================================
    日期：跨年推断 + 年份显示
    --------------------------------------------------------------------------
