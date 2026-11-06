@@ -613,8 +613,10 @@ fs.rmSync(envTmpDir, { recursive: true, force: true });
     const info = readPng(path.join(ROOT_DIR, ogBase));
     check(info.w === 1200 && info.h === 630,
       '分享图确实是 1200×630（实测 ' + info.w + '×' + info.h + '）—— 1.91:1 才不会被裁掉标题');
-    check(info.bytes < 1024 * 1024,
-      '分享图小于 1MB（' + Math.round(info.bytes / 1024) + ' KB），爬虫抓得动');
+    /* 150KB 是这一轮定下的硬线：218KB 那版在弱网下加载慢，而分享卡的全部
+       作用就是"点开链接前先看一眼"。这条断言防的就是它被悄悄换回去。 */
+    check(info.bytes <= 150 * 1024,
+      '分享图 ≤150KB（' + Math.round(info.bytes / 1024) + ' KB），爬虫抓得动');
     check(String(info.w) === String(metaOf('og:image:width')) &&
           String(info.h) === String(metaOf('og:image:height')),
       'og:image:width/height 与真实尺寸一致（写错客户端会先把卡片框画错）');

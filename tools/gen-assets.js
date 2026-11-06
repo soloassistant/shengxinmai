@@ -23,7 +23,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const png8 = require('./png8');
+
 const ROOT = path.resolve(__dirname, '..');
+
+/* 分享图的硬指标。218KB 的那一版会被社交平台慢慢抓、慢慢渲染，
+   而这张图的全部作用就是"点开链接前先看一眼"，等它加载完再显示不如没有。
+   150KB 是取舍点：再小就得牺牲渐变（24.9dB 那版肉眼可见糊），不能接受。 */
+const OG_MAX_BYTES = 150 * 1024;
+const OG_MIN_PSNR = 35;
 
 const BROWSERS = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -157,14 +165,28 @@ async function main() {
   await page.setContent(ogHtml(iconSvg), { waitUntil: 'load' });
   // 字体是异步加载的：不等它，截出来可能是回退字体（版式会悄悄变形）
   await page.evaluate(() => (document.fonts && document.fonts.ready) || null);
-  const ogBuf = await page.screenshot({ omitBackground: false, type: 'png' });
+  const ogShot = await page.screenshot({ omitBackground: false, type: 'png' });
+  /* 截图是 24 位真彩色，而这张图实际只有约 3400 种颜色 —— 降到 256 色索引
+     PNG 就能把 218KB 砍掉一半。但"变小"必须付得起"看不出差别"：
+     抖动后的 PSNR 低于 35dB 就让生成失败（exit 1），
+     不允许悄悄接受一张渐变糊掉的图 —— 那张图不如不做。 */
+  const ogSrc = png8.decode(ogShot);
+  const ogQ = png8.quantize(ogSrc.rgb, ogSrc.w, ogSrc.h, 256);
   const ogOut = path.join(ROOT, 'og-image.png');
-  fs.writeFileSync(ogOut, ogBuf);
+  fs.writeFileSync(ogOut, png8.encode(ogQ.indices, ogSrc.w, ogSrc.h, ogQ.palette));
 
   const og = pngInfo(ogOut);
   check(og.w === 1200 && og.h === 630, 'og-image.png 尺寸是 ' + og.w + '×' + og.h + '（要 1200×630）');
   check(!og.hasAlpha, 'og-image.png 不透明（透明底在部分客户端会变黑）');
   check(og.bytes > 20000, 'og-image.png 不是空白（' + og.bytes + ' B）');
+  check(og.bytes <= OG_MAX_BYTES,
+    'og-image.png ≤150KB（实测 ' + Math.round(og.bytes / 1024) + ' KB）');
+  check(ogQ.psnr >= OG_MIN_PSNR,
+    'PNG8 量化后 PSNR ≥35dB（实测 ' + ogQ.psnr.toFixed(1) + 'dB）—— 低于这个数就是肉眼可见的色带');
+
+  /* 后续版式检查读的是**真正要发布的那个文件**（量化后的），不是截图原图：
+     抖动会改像素，拿原图判"内容有没有被裁掉"就验错了对象。 */
+  const ogBuf = fs.readFileSync(ogOut);
 
   /* 裁剪安全区：拿产物的真实像素来判，不拿我的版式意图来判。
      微信/QQ 把链接图的缩略图按**中间方形**裁 —— 所以内容必须落在中心 630×630 里，
