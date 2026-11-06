@@ -300,12 +300,12 @@ const shuffled = {
 };
 const flHtml = SXM.renderFlightTable(shuffled);
 const flPrices = [...flHtml.matchAll(/fl-amount">([^<]+)</g)].map((m) => m[1]);
-const flOk = JSON.stringify(flPrices) === JSON.stringify(['¥720', '¥1150', '¥1580']);
+const flOk = JSON.stringify(flPrices) === JSON.stringify(['¥720.00', '¥1150.00', '¥1580.00']);
 if (flOk) { pass++; say('✓  航班表把乱序数据排成价格升序：' + flPrices.join(' ')); }
 else { fail++; say('✗  航班表没有按价格排序，实际 ' + flPrices.join(' ')); }
 
 // 价格必须真的写在行里 —— 「给出价格」不是「给你个链接自己去看」
-const hasPrices = /fl-amount">¥\d+/.test(flHtml);
+const hasPrices = /fl-amount">¥\d+\.\d{2}</.test(flHtml);
 if (hasPrices) { pass++; say('✓  每行都直接写了价格（不用点开看）'); }
 else { fail++; say('✗  航班行里没有价格数字'); }
 
@@ -321,7 +321,7 @@ else { fail++; say('✗  最便宜的一条没有高亮'); }
 
 // 航空器为空、价格缺失的脏数据不能把整表搞崩
 const dirty = SXM.renderFlightTable({ ok: true, flights: [{ price: null, carrier: 'X' }, { price: 500, carrier: 'Y', stopsText: '直飞' }] });
-if (typeof dirty === 'string' && dirty.includes('¥500')) { pass++; say('✓  混入脏数据时，好数据照样渲染'); }
+if (typeof dirty === 'string' && dirty.includes('¥500.00')) { pass++; say('✓  混入脏数据时，好数据照样渲染'); }
 else { fail++; say('✗  脏数据把航班表搞崩了'); }
 
 /* ---------- 机场三字码：错一个码，整条航线直接查无此航班 ---------- */
@@ -437,7 +437,7 @@ const sparkMany = SXM.spark({
 const sparkChecks = [
   [/<svg/.test(sparkMany), '点够了就画出曲线'],
   [sparkMany.includes('spark-v-near-lowest'), '曲线带上判定结果，颜色跟着判定走'],
-  [sparkMany.includes('低 ¥81') && sparkMany.includes('高 ¥100'), '标出采集区间，用户能自己复核'],
+  [sparkMany.includes('低 ¥81.00') && sparkMany.includes('高 ¥100.00'), '标出采集区间（两位小数），用户能自己复核'],
   [sparkMany.includes('已接近采集以来的最低价'), '把结论用文字也说一遍（不是只画线让人猜）'],
   [!NaN.toString().length || !/NaN/.test(sparkMany), '坐标里没有 NaN —— 有的话曲线会静默画不出来'],
 ];
@@ -508,14 +508,14 @@ const bsCard = SXM.renderBasket({
 });
 
 /* 断言文案时先去标签：金额是 <span class="cny">¥</span>130 这种结构，
-   直接 includes('¥130') 会因为中间夹了标签而假失败。 */
+   直接 includes('¥130.00') 会因为中间夹了标签而假失败。 */
 const plain = (html) => String(html).replace(/<[^>]*>/g, '');
 const bsText = plain(bsCard);
 
 const bsChecks = [
   [bsText.includes('建议分开买'), '把结论直接写在最显眼处'],
-  [bsText.includes('¥100'), '分件买最优的总价 100 出现在卡上'],
-  [bsText.includes('¥130'), '一家买齐的总价 130 也摆出来，用户能自己复核'],
+  [bsText.includes('¥100.00'), '分件买最优的总价 100.00 出现在卡上（两位小数）'],
+  [bsText.includes('¥130.00'), '一家买齐的总价 130.00 也摆出来，用户能自己复核'],
   [bsText.includes('分件买比最便宜的'), '把差额讲明白，而不是只说"更省"'],
   [bsText.includes('猫粮') && bsText.includes('猫砂'), '逐件明细都在'],
   [bsText.includes('次低是'), '每件都给了次低价，用户能看到"贵一点能少开一个 App"'],
@@ -912,7 +912,7 @@ const liveText = SXM.shopLiveToText('耳机', {
   ],
 });
 const liveTextChecks = [
-  [liveText.includes('京东：最低 ¥179'), '平台+最低价都在文本里'],
+  [liveText.includes('京东：最低 ¥179.00'), '平台+最低价都在文本里（两位小数）'],
   [liveText.includes('拼多多：没拿到'), '没拿到价的平台如实写"没拿到"'],
   [liveText.includes('官方 App'), '带"下单走官方"的提示，复制出去不带引导支付的暗示'],
 ];
@@ -1535,13 +1535,13 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   const flRows = dirty.split('<div class="fl-row').slice(1);
   const flAmounts = [...dirty.matchAll(/class="fl-amount">([^<]+)</g)].map((m) => m[1]);
   chk(flRows.length === 3, '三条航班都渲染出来了，实际 ' + flRows.length);
-  chk(flAmounts.length === 3 && flAmounts[0] === '¥300' && flAmounts[1] === '¥500',
-    '价格从低到高排：300 在前、500 在后，实际 ' + JSON.stringify(flAmounts));
+  chk(flAmounts.length === 3 && flAmounts[0] === '¥300.00' && flAmounts[1] === '¥500.00',
+    '价格从低到高排：300.00 在前、500.00 在后，实际 ' + JSON.stringify(flAmounts));
   chk(flAmounts[2] === '¥—', '价格不可信的那条排在最后、价格位显示 —，实际 ' + flAmounts[2]);
   chk(dirty.indexOf('NaN') === -1, '整张表不出现 NaN');
   chk((dirty.match(/fl-tag">最便宜</g) || []).length === 1, '「最便宜」只出现一次（不是每行都标）');
-  chk(/fl-tag">最便宜/.test(flRows[0]) && flRows[0].indexOf('¥300') !== -1,
-    '「最便宜」落在真正最低价那一行（¥300），不是"谁排第一谁最便宜"');
+  chk(/fl-tag">最便宜/.test(flRows[0]) && flRows[0].indexOf('¥300.00') !== -1,
+    '「最便宜」落在真正最低价那一行（¥300.00），不是"谁排第一谁最便宜"');
   chk(!/fl-tag">最便宜/.test(flRows[2]), '价格不可信的那条不参与「最便宜」评选');
 
   const allDirty = SXM.renderFlightTable({ ok: true, count: 2, flights: [{ price: null }, { price: 'abc' }] });
@@ -1558,17 +1558,17 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   const nullAmts = [...nullPrice.matchAll(/class="fl-amount">([^<]+)</g)].map((m) => m[1]);
   chk(nullPrice.indexOf('¥0') === -1,
     'price: null 不会被当成 ¥0（Number(null) === 0），实际价格位 ' + JSON.stringify(nullAmts));
-  chk(nullAmts.join('|') === '¥900|¥—',
+  chk(nullAmts.join('|') === '¥900.00|¥—',
     'price: null 排在最后且显示 —，实际 ' + JSON.stringify(nullAmts));
   const nullRows = nullPrice.split('<div class="fl-row').slice(1);
   chk(/fl-tag">最便宜/.test(nullRows[0]) && !/fl-tag">最便宜/.test(nullRows[1]),
-    '「最便宜」落在真有价格的那条（¥900）上，不落在 price: null 那条');
+    '「最便宜」落在真有价格的那条（¥900.00）上，不落在 price: null 那条');
 
   const blankPrice = SXM.renderFlightTable({ ok: true, count: 2, flights: [{ price: '   ' }, { price: 900 }] });
   chk(blankPrice.indexOf('¥0') === -1, 'price: 空串/纯空格 同样不会被当成 ¥0');
 
   const strPrice = SXM.renderFlightTable({ ok: true, count: 2, flights: [{ price: '500' }, { price: 300 }] });
-  chk(strPrice.indexOf('¥300') < strPrice.indexOf('¥500'),
+  chk(strPrice.indexOf('¥300.00') < strPrice.indexOf('¥500.00'),
     '数字字符串（接口常见的 "300"）也能正确排序，不会被当成字符串比较');
 
   /* 这两个字段原来没有兜底：缺字段时把字面量 undefined 印在航司名/meta 上。
@@ -2111,6 +2111,19 @@ chk(bad && bad.invalid === true && bad.date === null, '2月30日 仍判为「这
   });
   chk(/cny">¥<\/span>2\.68/.test(moneyCard) && /cny">¥<\/span>1\.01/.test(moneyCard),
     '价格显示按分四舍五入：2.675 → ¥2.68、1.005 → ¥1.01（不是 2.67 / 1.00）');
+  /* 规格统一：结果卡与手填清单一样，整元也要两位小数。
+     用户明确拍过的例子就是 1299 → ¥1299.00，这条直接钉住它。 */
+  const intCard = SXM.renderShopLive('耳机', {
+    demo: false, unconfigured: [],
+    platforms: [{
+      id: 'jd', name: '京东', ok: true, count: 1,
+      lowest: { final: 1299, sku: 'k', title: '耳机', history: null },
+      items: [{ title: '耳机', final: 1299, price: 1299, coupon: 0, url: 'https://a.example.com/1' }],
+    }],
+  });
+  chk(/cny">¥<\/span>1299\.00/.test(intCard)
+    && !/cny">¥<\/span>1299(?!\.)/.test(intCard),
+    '整元金额补齐两位小数：1299 → ¥1299.00（不是 ¥1299）');
   const MB = require('./manual-basket.js');
   chk(MB.parsePrice('1.005').value === 1.01,
     '手填 1.005 按分进位为 1.01（实际 ' + MB.parsePrice('1.005').value + '）');
