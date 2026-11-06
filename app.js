@@ -1114,8 +1114,10 @@
           refresh();
         }
       } else if (del) {
-        del.closest('.mb-item').remove();
-        refresh();
+        const row = del.closest('.mb-item');
+        const q = row.dataset.q || '';
+        askConfirm('删除这一行？', '「' + q + '」手填的平台和到手价会一起删掉，删了不能撤销。',
+          '删除这一行', () => { row.remove(); refresh(); });
       }
     });
     refresh();
@@ -2399,8 +2401,11 @@
 
     const watchDel = e.target.closest('[data-watch-remove]');
     if (watchDel) {
-      watchRemove(String(watchDel.dataset.q).trim().toLowerCase(), watchDel.dataset.platform);
-      renderDrawer();
+      const qKey = String(watchDel.dataset.q).trim().toLowerCase();
+      const platform = watchDel.dataset.platform;
+      const qText = (watchDel.closest('.watch-row') || {}).textContent || '';
+      askConfirm('不再记这件？', '「' + qText.trim().slice(0, 24) + '」会从「记下的商品」里移除，之后不再和它比价。',
+        '取消关注', () => { watchRemove(qKey, platform); renderDrawer(); });
       return;
     }
 
@@ -2597,6 +2602,9 @@
      免得它成为又一个"盖住了页面但底层还能 Tab 进去"的洞。 */
   const legalEl   = $('#legal');
   const legalMask = $('#legal-mask');
+  /* 危险操作确认面板：和说明面板同一套 .sheet 结构，也共用 inert / 焦点回收 */
+  const confirmEl   = $('#confirm');
+  const confirmMask = $('#confirm-mask');
 
   /* ---------- 抽屉的无障碍：inert + 焦点管理 ----------
      为什么必须有：两个抽屉只是**视觉上**盖住了页面（靠 .open 加遮罩），
@@ -2613,14 +2621,18 @@
     const dOpen = !!(drawer && drawer.classList.contains('open'));
     const bOpen = !!(basketEl && basketEl.classList.contains('open'));
     const lOpen = !!(legalEl && legalEl.classList.contains('open'));
-    if (appRoot) appRoot.inert = dOpen || bOpen || lOpen;
+    const cOpen = !!(confirmEl && confirmEl.classList.contains('open'));
+    if (appRoot) appRoot.inert = dOpen || bOpen || lOpen || cOpen;
     /* 抽屉之间也要互锁，而且**关着的时候就得锁**：
        .drawer 关着只是 translateX(102%) 移出屏幕外，元素还在无障碍树里、
        还能 Tab 到（里面就有「关闭」按钮和输入框）—— 键盘用户会 Tab 进
        一个自己看不见的面板。原来只锁了 .app，抽屉之间和关闭状态全漏了。 */
-    if (drawer) drawer.inert = !dOpen;
-    if (basketEl) basketEl.inert = !bOpen;
-    if (legalEl) legalEl.inert = !lOpen;
+    /* 确认面板打开时，底层抽屉即使自己也开着也要锁住：
+       它被确认面板盖了一半，但 Tab 仍能走进去 —— 确认框必须是模态的。 */
+    if (drawer) drawer.inert = !dOpen || cOpen;
+    if (basketEl) basketEl.inert = !bOpen || cOpen;
+    if (legalEl) legalEl.inert = !lOpen || cOpen;
+    if (confirmEl) confirmEl.inert = !cOpen;
   }
 
   /** 打开抽屉的统一处理：记住来源焦点 → 锁住主内容 → 把焦点移进抽屉 */
@@ -2865,8 +2877,37 @@
   if ($('#legal-close')) $('#legal-close').addEventListener('click', closeLegal);
   if (legalMask) legalMask.addEventListener('click', closeLegal);
 
+  /* ---------- 危险操作：先问一句，再动手 ----------
+     删除手填的一行、取消关注，都是"点一下就没了、也没法撤销"的动作。
+     原来点了立刻删；在手机上那一下极容易误触（删除按钮就在「另一家价」旁边）。
+     统一走一个确认面板：取消 = 什么都不做；确认 = 才执行。 */
+  let confirmAction = null;
+  function askConfirm(title, desc, okText, onOk) {
+    if (!confirmEl) { onOk(); return; }   // 面板缺失时宁可照旧执行，也不把功能卡死
+    confirmAction = onOk;
+    $('#confirm-title').textContent = title;
+    $('#confirm-desc').textContent = desc;
+    $('#confirm-ok').textContent = okText;
+    confirmEl.classList.add('open');
+    if (confirmMask) confirmMask.classList.add('open');
+    focusInto(confirmEl);
+  }
+  function settleConfirm(ok) {
+    const fn = confirmAction;
+    confirmAction = null;
+    if (!confirmEl) return;
+    confirmEl.classList.remove('open');
+    if (confirmMask) confirmMask.classList.remove('open');
+    restoreFocus();
+    if (ok && fn) fn();
+  }
+  if ($('#confirm-ok')) $('#confirm-ok').addEventListener('click', () => settleConfirm(true));
+  if ($('#confirm-cancel')) $('#confirm-cancel').addEventListener('click', () => settleConfirm(false));
+  if ($('#confirm-cancel-x')) $('#confirm-cancel-x').addEventListener('click', () => settleConfirm(false));
+  if (confirmMask) confirmMask.addEventListener('click', () => settleConfirm(false));
+
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closeDrawer(); closeBasket(); closeLegal(); }
+    if (e.key === 'Escape') { closeDrawer(); closeBasket(); closeLegal(); settleConfirm(false); }
   });
 
   drawer.addEventListener('change', (e) => {

@@ -276,6 +276,22 @@
   </div>
 </section>
 
+<!-- ============ 危险操作二次确认（删除商品 / 取消关注） ============ -->
+<div class="sheet-mask" id="confirm-mask"></div>
+<section class="sheet" id="confirm" role="dialog" aria-modal="true" aria-label="确认操作">
+  <div class="sheet-head">
+    <h3 id="confirm-title">确认操作</h3>
+    <button class="ghost-btn" id="confirm-cancel-x" type="button">关闭</button>
+  </div>
+  <div class="sheet-body confirm-body">
+    <p id="confirm-desc">这一步删掉就找不回来了。</p>
+  </div>
+  <div class="confirm-actions">
+    <button class="ghost-btn" id="confirm-cancel" type="button">取消</button>
+    <button class="danger-btn" id="confirm-ok" type="button">删除</button>
+  </div>
+</section>
+
 <script src="data.js"></script>
 <script src="manual-basket.js"></script>
 <script src="app.js"></script>
