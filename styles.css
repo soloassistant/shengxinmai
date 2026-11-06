@@ -854,6 +854,11 @@ p{ margin:0; }
 .chips-recent:not([hidden]){ padding-bottom:6px; }
 .chip-recent{ background:var(--surface-2); border-style:dashed; }
 .chip-recent::before{ content:'↻ '; color:var(--ink-3); }
+/* 空态文案：不是按钮，别用 chip 的样子骗人点 */
+.recent-hint{
+  display:block; padding:2px 2px 0;
+  font-size:12px; line-height:1.6; color:var(--ink-3);
+}
 
 .card-actions{ margin-top:12px; display:flex; justify-content:flex-end; }
 .copy-btn{
