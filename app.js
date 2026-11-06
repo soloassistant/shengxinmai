@@ -749,6 +749,7 @@
               String(it.title || product).trim().slice(0, 1))}</div>`
           : (src
               ? `<img class="row-img" src="${esc(src)}" alt="" loading="lazy"
+                     data-name="${esc(String(it.title || product).trim())}"
                      referrerpolicy="no-referrer">`
               : '');
         return `
@@ -2355,6 +2356,20 @@
   }
   if (input && input.addEventListener) input.addEventListener('input', syncSendEnabled);
   syncSendEnabled();
+
+  /* 商品图 404 / 图床拒绝时不留下破图：换成一个不发请求的首字占位块。
+     只能在这里统一接 —— CSP 的 script-src 没放行内联 onerror，
+     而 error 事件不冒泡，所以用捕获阶段。 */
+  document.addEventListener('error', (e) => {
+    const img = e.target;
+    if (!img || img.tagName !== 'IMG' || !img.classList || !img.classList.contains('row-img')) return;
+    const ph = document.createElement('div');
+    ph.className = 'row-img row-img-ph';
+    ph.setAttribute('aria-hidden', 'true');
+    const name = String(img.getAttribute('data-name') || '').trim();
+    ph.textContent = name.slice(0, 1) || '图';
+    if (img.parentNode) img.parentNode.replaceChild(ph, img);
+  }, true);
 
   document.addEventListener('click', (e) => {
     /* 顺序有讲究：先判 data-open，再判 .chip / .cap。
