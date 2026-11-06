@@ -28,6 +28,7 @@ const STATIC_WHITELIST = new Set([
   'index.html',
   'app.js',
   'data.js',
+  'manual-basket.js',
   'styles.css',
   'sw.js',
   // 安装为桌面应用所需
