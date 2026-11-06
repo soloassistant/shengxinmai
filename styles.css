@@ -14,6 +14,7 @@
   --ink-3:         #666E7B;
   --brand:         #FF5A36;
   --brand-deep:    #C2410C; /* 承载白字的最小加深色：5.18:1 */
+  --focus-ring:    #C2410C; /* 焦点环：对白底 5.17:1，看得见才叫焦点 */
   --brand-soft:    #FFF1ED;
   --brand-ink:     #C7371A;
   --food:          #F59E0B;
@@ -487,7 +488,7 @@ p{ margin:0; }
   transition:border-color .15s, box-shadow .15s;
 }
 #input::placeholder{ color:var(--ink-3); }
-#input:focus{ border-color:var(--brand-deep); box-shadow:0 0 0 3px rgba(194,65,12,.28); }
+#input:focus{ border-color:var(--focus-ring); box-shadow:0 0 0 3px var(--focus-ring); }
 .send{
   flex:0 0 auto; width:44px; height:44px; border-radius:50%;
   background:var(--brand); color:#fff; font-size:19px; font-weight:700;
@@ -639,6 +640,7 @@ p{ margin:0; }
   --ink-2:     #A9B2BF;
   --ink-3:     #8B95A3;
   --brand:     #FF6A45;
+  --focus-ring:#FF8A6A; /* 对深色底 5.2:1；16% 透明环实测只有 1.7:1 */
   --brand-soft:#2A1B16;
   --brand-ink: #FFA98C;
   --food:      #F0A824;
@@ -678,7 +680,6 @@ p{ margin:0; }
 :root[data-theme="dark"] .cmp-track{ background:#0E1116; border-color:var(--line); }
 :root[data-theme="dark"] .cmp-verdict{ background:var(--surface-2); }
 :root[data-theme="dark"] .switch-row{ background:var(--surface-2); border-color:var(--line); }
-:root[data-theme="dark"] #input:focus{ border-color:#70402F; box-shadow:0 0 0 3px rgba(255,106,69,.16); }
 :root[data-theme="dark"] .send:disabled{ background:#333A44; }
 :root[data-theme="dark"] .drawer{ background:var(--surface); }
 :root[data-theme="dark"] .drawer-mask{ background:rgba(0,0,0,.62); }
@@ -756,8 +757,7 @@ p{ margin:0; }
   font:inherit; font-size:13.5px; line-height:1.75; outline:none;
   transition:border-color .15s, box-shadow .15s;
 }
-#basket-text:focus{ border-color:#FFC6B6; box-shadow:0 0 0 3px rgba(255,90,54,.1); }
-:root[data-theme="dark"] #basket-text:focus{ border-color:#70402F; box-shadow:0 0 0 3px rgba(255,106,69,.16); }
+#basket-text:focus{ border-color:var(--focus-ring); box-shadow:0 0 0 3px var(--focus-ring); }
 #basket-text::placeholder{ color:var(--ink-3); }
 .basket-hint{ font-size:12px; color:var(--ink-3); line-height:1.65; }
 .basket-bar{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
